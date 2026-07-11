@@ -21,9 +21,17 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME} PUBLIC
     AYCore
     AYGameLoop
+    # AYAudio is linked PRIVATE so that AYAudio.lib (and its own PRIVATE
+    # winmm/ole32/user32 deps) do not leak onto the link line of consumers
+    # (AYEditor, AYEditorShell_Demo, AYEditorShutdownRepro). ApplicationImpl
+    # is the only TU that references AudioSubSystem / makeMiniaudioBackend.
+    PRIVATE AYAudio
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )
+
+enable_testing()
+add_subdirectory(unittest)

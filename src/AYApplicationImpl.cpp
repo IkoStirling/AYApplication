@@ -3,6 +3,10 @@
 #include <AYApplication.h>
 #include <AYGameLoop.h>
 #include <AYCore.h>
+
+#include <AYAudioSubSystem.h>
+#include <AYAudioBackendFactory.h>
+
 #include <cstdio>
 
 namespace ayt::app
@@ -118,6 +122,25 @@ public:
 
     const char* getVersion() const override { return "1.0.0"; }
     const char* getEngineVersion() const override { return "1.0.0"; }
+
+    // Register audio subsystem with a backend chosen from CLI flags:
+    //   -no-audio   → Null backend (commands flow but no device opens)
+    //   (default)   → Miniaudio backend (real device)
+    void registerSubSystems() override
+    {
+        // Audio is a presentation module — Server builds skip it (matches
+        // AYAudio/design.md §1.2 non-goal "Run on Server build"). Until the
+        // build-target flag infra lands, we treat `noAudio` as the only gate.
+        if (_cmdLine.noAudio) {
+            return;
+        }
+
+        auto audioSub = std::make_unique<ayt::audio::AudioSubSystem>();
+        audioSub->setBackend(ayt::audio::makeMiniaudioBackend());
+        // Ownership transfers to the GameLoop / SubSystemRegistry, which
+        // deletes via the ISubSystem base pointer on shutdown.
+        ayt::game::GameLoop::instance().registerSubSystem(audioSub.release());
+    }
 
     void run() override
     {
