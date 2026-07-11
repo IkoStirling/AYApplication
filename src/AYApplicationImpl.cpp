@@ -7,6 +7,8 @@
 #include <AYAudioSubSystem.h>
 #include <AYAudioBackendFactory.h>
 
+#include <AYDeviceSubSystem.h>
+
 #include <cstdio>
 
 namespace ayt::app
@@ -128,6 +130,8 @@ public:
     //   (default)   → Miniaudio backend (real device)
     void registerSubSystems() override
     {
+        registerDeviceSubSystem();
+
         // Audio is a presentation module — Server builds skip it (matches
         // AYAudio/design.md §1.2 non-goal "Run on Server build"). Until the
         // build-target flag infra lands, we treat `noAudio` as the only gate.
@@ -140,6 +144,21 @@ public:
         // Ownership transfers to the GameLoop / SubSystemRegistry, which
         // deletes via the ISubSystem base pointer on shutdown.
         ayt::game::GameLoop::instance().registerSubSystem(audioSub.release());
+    }
+
+    // Create the window + input devices and register "Device" (priority 0, so
+    // it initializes and polls first). The window it owns is exposed to the
+    // renderer via RendererSubSystem::setWindowProvider(makeWindowProvider())
+    // — wired by the client that also registers the renderer, keeping this
+    // module free of the render/bgfx dependency.
+    void registerDeviceSubSystem()
+    {
+        ayt::device::DeviceConfig config{};
+        config.window.title  = _desc.name;
+        config.window.width  = static_cast<int>(_desc.width);
+        config.window.height = static_cast<int>(_desc.height);
+        ayt::device::DeviceSubSystem::setBootstrapConfig(config);
+        ayt::device::DeviceSubSystem::registerSubSystem();
     }
 
     void run() override
