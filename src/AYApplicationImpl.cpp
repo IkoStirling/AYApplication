@@ -8,8 +8,10 @@
 #include <AYAudioBackendFactory.h>
 
 #include <AYDeviceSubSystem.h>
+#include <AYDeviceInputProvider.h>
 #include <AYEntityModule.h>
 #include <AYScriptSubSystem.h>
+#include <AYSubSystemRegistry.h>
 
 #include <cstdio>
 
@@ -145,6 +147,28 @@ public:
         ayt::entity::bootstrapEntityCore();
         ayt::game::GameLoop::instance().registerSubSystem(
             new ayt::script::ScriptSubSystem());
+
+        // INT-02 (2026-07-15): Logia `input.is_pressed(name)` reads
+        // AYDevice InputMapping via DeviceInputProvider. Application
+        // owns its DeviceSubSystem (vs Editor's stack-local
+        // DeviceManager hoist in AYEditorApp.cpp); static provider
+        // holds a raw pointer to DeviceSubSystem::findRegistered()'s
+        // internal DeviceManager. Lifetime safety: ScriptSubSystem::
+        // shutdown() defensively calls setInputProvider(nullptr)
+        // before bridge.shutdown() (INT-02 follow-up to the
+        // descriptor-deps fix), so when GameLoop::clearAll deletes
+        // the DeviceSubSystem first the bridge has already dropped
+        // the reference.
+        if (auto* devSub = ayt::device::DeviceSubSystem::findRegistered()) {
+            auto* sub = ayt::game::SubSystemRegistry::instance()
+                           .findSubSystem("ayt.script.runtime");
+            if (auto* scriptSub =
+                    dynamic_cast<ayt::script::ScriptSubSystem*>(sub)) {
+                static ayt::device::DeviceInputProvider s_provider(
+                    &devSub->manager());
+                scriptSub->bridge().setInputProvider(&s_provider);
+            }
+        }
 
         // Audio is a presentation module — Server builds skip it (matches
         // AYAudio/design.md §1.2 non-goal "Run on Server build"). Until the
