@@ -25,8 +25,13 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     # own PRIVATE win32 deps) do not leak onto the link line of consumers
     # (AYEditor, AYEditorShell_Demo, AYEditorShutdownRepro). ApplicationImpl is
     # the only TU that references AudioSubSystem / DeviceSubSystem.
+    # INT-01 (2026-07-15): AYScript is linked PRIVATE because ApplicationImpl
+    # is the only TU that references ScriptSubSystem. AYScript transitively
+    # pulls AYEntity/AYReflect, so this effectively re-uses those libs without
+    # leaking the Logia DSL / ScriptComponent API onto consumer link lines.
     PRIVATE AYAudio
     PRIVATE AYDeviceSubSystem
+    PRIVATE AYScript
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE

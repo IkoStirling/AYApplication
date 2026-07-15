@@ -1,5 +1,7 @@
 # AYApplication Design
 
+> **输入子系统（2026-07-11）**：Client 侧仅注册 **`DeviceSubSystem`**（`AYDevice`：窗口 + 输入轮询 + `InputMapping`）。**无** `InputSubSystem` / **`AYInput`** 模块 — 见 [`AYDevice/design.md` §1.3](../AYDevice/design.md)。
+
 ## 1. 概述
 
 AYApplication 是 AY Engine 的**应用入口层**，负责：
@@ -236,8 +238,7 @@ struct SubSystemDescriptor {
 | TaskScheduler | ✅ | ✅ | ✅ | Core |
 | Renderer | ✅ | ✅ | ❌ | Client |
 | Audio | ✅ | ✅ | ❌ | Client |
-| Input | ✅ | ✅ | ❌ | Client |
-| Device | ✅ | ✅ | ❌ | Client |
+| Device | ✅ | ✅ | ❌ | Client — **窗口 + 输入轮询 + Action 映射**（`DeviceSubSystem`）；**无**独立 `InputSubSystem` / `AYInput` 模块（见 [`AYDevice/design.md` §1.3](../AYDevice/design.md)） |
 | Physics | ✅ | ✅ | ✅ | Shared |
 | Animation | ✅ | ✅ | ✅ | Shared |
 | Resource | ✅ | ✅ | ✅ | Shared |
@@ -265,7 +266,9 @@ public:
     #if !defined(AY_BUILD_TARGET_SERVER)
         GameLoop::instance().registerSubSystem<RendererSubSystem>();
         GameLoop::instance().registerSubSystem<AudioSubSystem>();
-        GameLoop::instance().registerSubSystem<InputSubSystem>();
+        // Runtime audio engine: see AYRuntime/AYAudio/design.md (miniaudio; not SDL audio)
+        GameLoop::instance().registerSubSystem<DeviceSubSystem>();
+        // Window + input poll + InputMapping — AYDevice/design.md §1.3 (no separate InputSubSystem / AYInput)
     #endif
 
         // Server only
@@ -871,7 +874,7 @@ set_property(CACHE AY_BUILD_TARGET PROPERTY STRINGS "game" "server" "editor")
 # ============================================
 # 根据构建类型排除子系统
 # ============================================
-set(AY_CLIENT_SUBSYSTEMS "Renderer;Audio;Input;Device")
+set(AY_CLIENT_SUBSYSTEMS "Renderer;Audio;Device")
 set(AY_SERVER_SUBSYSTEMS "AI;Network;ServerSpecific")
 set(AY_EDITOR_SUBSYSTEMS "EditorTools;SceneEditor;Inspector")
 

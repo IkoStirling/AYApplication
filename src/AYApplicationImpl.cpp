@@ -8,6 +8,8 @@
 #include <AYAudioBackendFactory.h>
 
 #include <AYDeviceSubSystem.h>
+#include <AYEntityModule.h>
+#include <AYScriptSubSystem.h>
 
 #include <cstdio>
 
@@ -131,6 +133,18 @@ public:
     void registerSubSystems() override
     {
         registerDeviceSubSystem();
+
+        // INT-01 (2026-07-15): wire minimal Entity surface + ScriptSubSystem
+        // so a standalone game can load + tick Logia scripts without pulling
+        // in the renderer/audio chain. bootstrapEntityCore registers
+        // EntitySubSystem + Transform / Health / etc. component types —
+        // skipping bootstrapModule() avoids pulling the render systems
+        // (renderer/AYShader) which a non-graphical app would otherwise need
+        // to link. Hot reload is intentionally OFF — standalone games
+        // restart on .logia changes; dev workflows use the Editor.
+        ayt::entity::bootstrapEntityCore();
+        ayt::game::GameLoop::instance().registerSubSystem(
+            new ayt::script::ScriptSubSystem());
 
         // Audio is a presentation module — Server builds skip it (matches
         // AYAudio/design.md §1.2 non-goal "Run on Server build"). Until the
