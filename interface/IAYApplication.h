@@ -11,6 +11,11 @@ namespace ayt::game
 class GameLoop;
 }
 
+namespace ayt::event
+{
+class EventBus;
+}
+
 namespace ayt::app
 {
 
@@ -115,6 +120,14 @@ public:
     virtual const GameDesc& getDesc() const = 0;
     virtual ayt::game::GameLoop& getGameLoop() = 0;
     virtual const AppCommandLine& getCommandLine() const = 0;
+
+    // Host EventBus accessor. Returns the process-wide singleton
+    // (ayt::event::EventBus::instance()) — used to subscribe / emit / pump
+    // from outside the ApplicationImpl. Cleanup of host-scoped subscriptions
+    // is the host's responsibility (use ayt::app::EventBusHostScope, or pair
+    // ScopedConnection with your own lifetime; do NOT call
+    // EventBus::unsubscribeAll() during shutdown — Phase 4 lesson).
+    virtual ayt::event::EventBus& eventBus() = 0;
 
     // 版本信息
     virtual const char* getVersion() const = 0;

@@ -4,10 +4,12 @@ project(AYApplication)
 
 set(SOURCES
     src/AYApplicationImpl.cpp
+    src/AYAppEventHost.cpp
 )
 
 set(HEADERS
     interface/IAYApplication.h
+    interface/AYAppEventHost.h
     include/AYApplication.h
 )
 

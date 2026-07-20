@@ -13,6 +13,9 @@
 #include <AYScriptSubSystem.h>
 #include <AYSubSystemRegistry.h>
 
+#include <ayevent/EventBus.h>
+#include <AYAppEventHost.h>
+
 #include <cstdio>
 
 namespace ayt::app
@@ -211,12 +214,28 @@ public:
 
         onPreShutdown();
         loop.shutdown();
+        // Phase 4 (a8c8be9) lesson applied: the host application, not
+        // GameLoop, owns the per-instance EventBus listener cleanup.
+        // Subscribers created via `_events.subscribe<T>(...)` (or via
+        // ayt::event::EventBus::instance() through eventBus()) are released
+        // here, LIFO, before the rest of the application finishes teardown.
+        _events.disconnect();
         onShutdown();
+    }
+
+    ayt::event::EventBus& eventBus() override
+    {
+        return ayt::event::EventBus::instance();
     }
 
 private:
     GameDesc       _desc;
     AppCommandLine _cmdLine;
+
+    // Host-owned EventBus subscriptions (Phase 4 §a8c8be9 lesson).
+    // Connect listeners here instead of holding raw ScopedConnection
+    // members so that disconnect() in run() releases them all in one place.
+    ayt::app::EventBusHostScope _events;
 };
 
 std::unique_ptr<IApplication> IApplication::create(const GameDesc& desc)
