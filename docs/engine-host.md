@@ -1,11 +1,10 @@
-# Engine Host — 装配与服务约定（Step 1）
+# Engine Host — 装配与服务约定
 
-**Status:** Step 1 — docs + thin host + default register helpers  
+**Status:** Step 1（装配）+ **服务面**（`resources` / `physics` / `audio` + 可扩展键表）  
 **Owner:** `AYApplication`  
 **Related:** [`../design.md`](../design.md) · [`../../AYGameLoop/docs/sim-present-time.md`](../../AYGameLoop/docs/sim-present-time.md)
 
-本文件定义**引擎外壳**的第一步：默认 SubSystem 装配表、薄 `IEngineHost`、以及 CR 纪律。  
-完整 Plugin 扩展点 / 多 Host 实例见文末「以后」。
+本文件定义**引擎外壳**：默认 SubSystem 装配、`IEngineHost` 服务发现、以及**以后加新单例/服务时必须走的登记流程**。
 
 ---
 
@@ -14,11 +13,9 @@
 | 角色 | 模块 | 职责 |
 |------|------|------|
 | 产品入口 | `IApplication`（Client=`ApplicationImpl`，Editor=`EditorApp`） | 选壳、CLI、生命周期钩子 |
-| **引擎外壳** | `IEngineHost` + `registerDefault*Modules` | 装配顺序、当前 Host、服务查找入口 |
+| **引擎外壳** | `IEngineHost` + `registerDefault*Modules` | 装配顺序、当前 Host、**服务表** |
 | 帧循环 | `AYGameLoop` | `fixedUpdate` / `update`、暂停、帧率 |
 | 扩展（以后） | `AYPlugin` | 往 Host 扩展点填实现 |
-
-**今天：** `GameApp` / `ServerApp` 仍是 design 概念；可运行入口 = `ApplicationImpl`（standalone client）+ `EditorApp`。
 
 ---
 
@@ -30,77 +27,133 @@
 
 | 顺序 | 步骤 | 说明 |
 |------|------|------|
-| 1 | `DeviceSubSystem` | 窗口 + 输入；priority 靠前 |
-| 2 | `bootstrapEntityCore()` | Entity 核心，**不**拉渲染系统 |
-| 3 | `ScriptSubSystem` | Logia；显式注册 |
+| 1 | `DeviceSubSystem` | 窗口 + 输入 |
+| 2 | `bootstrapEntityCore()` | Entity 核心，不拉渲染 |
+| 3 | `ScriptSubSystem` | Logia |
 | 4 | `AudioSubSystem`（可选） | `-no-audio` 则跳过 |
+| 5 | `bindBuiltinHostServices` | 写入 Host 服务表 |
 
-Client **不**默认注册：`RendererSubSystem`、`NetworkSubSystem`、完整 `bootstrapModule()`。
+### 2.2 Editor（`registerDefaultEditorModules`）
 
-调用方随后可做：Script ← `DeviceInputProvider`（生命周期由 App 保证）。
-
-### 2.2 Editor shell（`ayt::editor::registerDefaultEditorModules`）
-
-| 顺序 | 步骤 | 说明 |
-|------|------|------|
-| 1 | `bootstrapModule()` | Entity + skinned/render-related ECS systems |
-| 2 | `registerNetworkSubSystem()` | 联网 Play |
-| 3 | `RendererSubSystem` | GPU / composite |
-| 4 | `ScriptSubSystem` | Logia + 热更由 Editor 侧另开 |
-
-Editor 的 `DeviceManager` 由 `EditorApp` **成员**持有（非 DeviceSubSystem），再桥到 Script。  
-`EditorPlayRuntime` 可能在进 Play 时再次确保 Entity/Network/Renderer；以不重复破坏既有会话为前提，逐步收拢到同一 helper。
+| 顺序 | 步骤 |
+|------|------|
+| 1–4 | Entity full + Network + Renderer + Script |
+| 5 | `bindBuiltinHostServices`（+ Editor 自有 Device 桥接仍在 App 内） |
 
 ### 2.3 Server（未来）
 
-| 步骤 | 说明 |
-|------|------|
-| `bootstrapEntityCore` + Script（可选） | 无窗口 |
-| **跳过** Device / Audio / Renderer | 与 AYAudio/design 一致 |
+`bootstrapEntityCore` + 可选 Script；**跳过** Device / Audio / Renderer。
 
 ---
 
-## 3. `IEngineHost`（Step 1 表面）
+## 3. 服务面（游戏 / 脚本怎么用）
 
 ```cpp
-ayt::app::IEngineHost& host = ayt::app::defaultEngineHost();
-// 或 App 运行期间：
-ayt::app::IEngineHost* h = ayt::app::currentEngineHost();
+auto* host = ayt::app::currentEngineHost();
+if (!host) { /* outside Application::run */ }
 
-h->gameLoop();
-h->eventBus();
-h->findSubSystem("ayt.script.runtime");
+// 推荐：具名访问（演示里的 ctx.physics() 形态）
+ayt::resource::ResourceManager* res = host->resources();   // 通常非空（单例回退）
+ayt::physics::PhysicsManager*   phys = host->physics();  // 未 provide 则为 nullptr
+ayt::audio::AudioEngine*        aud = host->audio();     // SubSystem 未 init 前可能为 nullptr
+
+if (phys) {
+    phys->step(dt);
+}
+
+// 通用键（新服务 / 游戏自有服务）
+host->provide("game.inventory", inventorySys);
+auto* inv = host->service<InventorySystem>("game.inventory");
 ```
 
-| API | Step 1 | 以后 |
-|-----|--------|------|
-| `gameLoop()` / `eventBus()` / `findSubSystem` | ✅ | 保留 |
-| `resources()` / `physics()` / `audio()` | ❌ 仍用各模块 API / 单例 | Host v2 窄接口 |
-| Plugin 扩展点表 | ❌ 文档占位 | Plugin v1 |
+| API | 含义 |
+|-----|------|
+| `resources()` | 已 `provide` 的指针，否则回退 `ResourceManager::instance()` |
+| `physics()` | **仅**登记表；PhysicsManager 非进程单例，谁 `create` 谁 `provide` |
+| `audio()` | 登记表，或惰性从名为 `"Audio"` 的 SubSystem 取 `engine()` |
+| `findSubSystem(name)` | 逃生口；新代码优先具名/键服务，不要靠字符串找业务 API |
 
-`ApplicationImpl::run` / `EditorApp::run` 应在主体生命周期内 `EngineHostScope`（或等价）设置 `currentEngineHost`。
-
----
-
-## 4. CR 纪律（现在）
-
-1. **新 App / demo 默认注册**优先调用 `registerDefaultClientModules` / `registerDefaultEditorModules`，避免复制粘贴三行 bootstrap。  
-2. **新代码取 GameLoop / EventBus / 已注册 SubSystem**：优先 `currentEngineHost()`（非空时），过渡期允许直接 `::instance()`。  
-3. **不要**在业务代码里假设「Physics 一定是某单例」——等 Host v2 再收。  
-4. 改装配顺序：先改本文件表格 + helper，再改 App。  
-5. Sim/Present 钩子纪律见 `AYGameLoop/docs/sim-present-time.md`。
+`ApplicationImpl::run` / `EditorApp::run` 内使用 `EngineHostScope`；装配后调用 `bindBuiltinHostServices`。
 
 ---
 
-## 5. 以后（不要现在做）
+## 4. 以后添加新单例 / 新服务（必读）
 
-- Host v2：`resources()` / `physics()` / `audio()` 窄接口 + 注册表  
-- Plugin：tick / 菜单 / loader / Editor 面板扩展点  
-- 多 Host（测试、多世界）  
+引擎会不断出现新的全局能力（Save、Scene、Navigation…）。**不要**让游戏代码直接依赖又一个 `Foo::instance()` 扩散；按下列清单登记到 Host。
+
+### 4.1 清单（CR 勾选）
+
+1. **选稳定键名**  
+   - 引擎内置：`ayt.<module>.<Type>`（与现有 `kHostService*` 同风格）  
+   - 游戏项目：`game.<name>` / `<studio>.<name>`  
+   - 在 `IEngineHost.h` 增加 `inline constexpr const char* kHostService…`（若为引擎内置）
+
+2. **更新本文件表格**（§4.2）——键、类型、生命周期、谁负责 `provide`
+
+3. **（可选）具名访问器**  
+   - 高频引擎服务才加 `host->foo()`；低频用 `service<T>(key)` 即可  
+   - 具名 API 放在 `IEngineHost` + `DefaultEngineHost`，并写清 nullptr 语义
+
+4. **在装配点 `provide`**  
+   - 进程单例：`bindBuiltinHostServices` 或模块 `register*` 末尾  
+   - 会话对象（如 PhysicsManager）：`create` 之后立刻  
+     `host.provide(kHostServicePhysics, mgr.get());`  
+   - 关闭/销毁前：`provide(key, nullptr)` 或 `clearProvidedServices()`
+
+5. **所有权**  
+   - Host **不拥有**服务对象，只存裸指针；生命周期仍归模块 / App / unique_ptr
+
+6. **禁止**  
+   - 新玩法代码新增对 `FooManager::instance()` 的硬依赖而不登记 Host（过渡期 allowlist 除外）
+
+### 4.2 内置服务键表（随代码更新）
+
+| Key 常量 | 字符串 | 类型 | 谁 provide | 空指针含义 |
+|----------|--------|------|------------|------------|
+| `kHostServiceResources` | `ayt.resource.ResourceManager` | `ResourceManager*` | `bindBuiltinHostServices`；`resources()` 另有 instance 回退 | 几乎不应为空 |
+| `kHostServicePhysics` | `ayt.physics.PhysicsManager` | `PhysicsManager*` | 创建该 manager 的 App/玩法 | 未创建物理会话 |
+| `kHostServiceAudio` | `ayt.audio.AudioEngine` | `AudioEngine*` | bind 时若已 init；否则 `audio()` 惰性查 SubSystem | 无 Audio 模块或尚未 initialize |
+
+**新增行时：** 改代码键常量 + 改本表 +（若有）具名 API，同一 PR。
+
+### 4.3 示例：假设新增 `AYSave::SaveService`
+
+```cpp
+// IEngineHost.h
+inline constexpr const char* kHostServiceSave = "ayt.save.SaveService";
+
+// 装配后
+host.provide(kHostServiceSave, saveService);
+
+// 游戏
+if (auto* save = host.service<ayt::save::SaveService>(kHostServiceSave)) {
+    save->writeSlot(0);
+}
+```
+
+若 Save 变成一等公民再考虑 `host->save()` 糖衣。
+
+---
+
+## 5. CR 纪律
+
+1. 默认注册走 `registerDefault*Modules`，随后 `bindBuiltinHostServices`。  
+2. 业务取资源/音频/物理：`currentEngineHost()->resources()/audio()/physics()`。  
+3. 新全局能力：走 §4，不要只加单例。  
+4. 改装配顺序：先改 §2 表再改 helper。  
+5. Sim/Present：`AYGameLoop/docs/sim-present-time.md`。
+
+---
+
+## 6. 以后仍可做
+
+- Plugin 扩展点（tick / 菜单 / loader）  
+- 多 Host 实例（测试）  
 - 与 Scene / Save / `simTick` 事件对齐  
+- 更窄的接口类型（`IPhysicsQuery` 等）替代具体 Manager（可渐进）
 
 ---
 
-## 6. 一句话
+## 7. 一句话
 
-**App 选壳 → Host 装配默认模块并露出查找口 → GameLoop 转起来；玩家无感，开发者少接线。**
+**App 选壳 → 装配模块 → `provide` 进 Host → 游戏用 `host->physics()` / 键服务；新单例先登记键表，再考虑具名 API。**

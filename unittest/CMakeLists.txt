@@ -71,13 +71,13 @@ ay_configure_test_tmpdir(EventBusScopeTest)
 add_test(NAME EventBusScopeTest COMMAND EventBusScopeTest)
 
 # -----------------------------------------------------------------------------
-# EngineHostTest - IEngineHost without linking full AYApplication (same reason
-# as EventBusScopeTest: avoid AYAudio/bimg tinyexr collision on the leaf exe).
+# EngineHostTest - service registry contract (FakeHost; no DefaultEngineHost /
+# AYResource/AYAudio ù avoids tinyexr collision on this leaf exe).
 # -----------------------------------------------------------------------------
 add_executable(EngineHostTest
     TestMain.cpp
     Test_EngineHost.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/AYEngineHost.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/AYEngineHostScope.cpp
 )
 
 target_include_directories(EngineHostTest PRIVATE

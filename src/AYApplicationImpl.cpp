@@ -141,6 +141,7 @@ public:
         opts.windowHeight = static_cast<int>(_desc.height);
         opts.enableAudio = !_cmdLine.noAudio;
         registerDefaultClientModules(opts);
+        bindBuiltinHostServices(engineHost());
 
         // INT-02: Script ← DeviceInputProvider. Lifetime: static provider
         // points at DeviceSubSystem's manager; ScriptSubSystem::shutdown
