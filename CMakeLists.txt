@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(AYApplication)
+project(AYApplication
+    VERSION 0.1.0
+    DESCRIPTION "AYApplication — host-side SubSystem wiring + EventBus host cleanup"
+)
 
 set(SOURCES
     src/AYApplicationImpl.cpp
@@ -43,3 +46,5 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 
 enable_testing()
 add_subdirectory(unittest)
+
+message(STATUS "AYApplication v0.1.0 (EventBusHostScope + INT-01/02 ship) — see ${CMAKE_CURRENT_SOURCE_DIR}/design.md")

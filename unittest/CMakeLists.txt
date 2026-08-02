@@ -32,16 +32,17 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 
 # Register with ctest so `ctest` picks up the binary automatically.
 enable_testing()
+ay_configure_test_tmpdir(${PROJECT_NAME})
 add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})
 
 # -----------------------------------------------------------------------------
 # EventBusScopeTest - standalone EventBusHostScope tests
 # -----------------------------------------------------------------------------
 # The main AYApplicationTest exe pulls in the full AYApplication library, which
-# transitively drags AYAudio â†’ bgfx/bimg â†’ tinyexr symbols colliding with
+# transitively drags AYAudio â†?bgfx/bimg â†?tinyexr symbols colliding with
 # basisu_encoder.lib. That collision is pre-existing on baseline main and is
 # unrelated to this commit. To verify EventBusHostScope independently, this
-# target links ONLY the bits it needs (no AYApplication â†’ no AYAudio â†’ no bimg).
+# target links ONLY the bits it needs (no AYApplication â†?no AYAudio â†?no bimg).
 # It compiles AYAppEventHost.cpp directly from the lib source so we don't have
 # to expose it as a separate library.
 # -----------------------------------------------------------------------------
@@ -66,4 +67,5 @@ target_compile_options(EventBusScopeTest PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
 
+ay_configure_test_tmpdir(${PROJECT_NAME})
 add_test(NAME EventBusScopeTest COMMAND EventBusScopeTest)
