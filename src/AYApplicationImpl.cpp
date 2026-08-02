@@ -4,12 +4,11 @@
 #include <AYGameLoop.h>
 #include <AYCore.h>
 
-#include <AYAudioSubSystem.h>
-#include <AYAudioBackendFactory.h>
+#include <AYRegisterDefaultModules.h>
+#include <IEngineHost.h>
 
 #include <AYDeviceSubSystem.h>
 #include <AYDeviceInputProvider.h>
-#include <AYEntityModule.h>
 #include <AYScriptSubSystem.h>
 #include <AYSubSystemRegistry.h>
 
@@ -132,39 +131,22 @@ public:
     const char* getVersion() const override { return "1.0.0"; }
     const char* getEngineVersion() const override { return "1.0.0"; }
 
-    // Register audio subsystem with a backend chosen from CLI flags:
-    //   -no-audio   → Null backend (commands flow but no device opens)
-    //   (default)   → Miniaudio backend (real device)
     void registerSubSystems() override
     {
-        registerDeviceSubSystem();
+        // Engine-host Step 1: shared Client assembly table
+        // (docs/engine-host.md §2.1).
+        ClientModuleOptions opts;
+        opts.windowTitle = _desc.name;
+        opts.windowWidth = static_cast<int>(_desc.width);
+        opts.windowHeight = static_cast<int>(_desc.height);
+        opts.enableAudio = !_cmdLine.noAudio;
+        registerDefaultClientModules(opts);
 
-        // INT-01 (2026-07-15): wire minimal Entity surface + ScriptSubSystem
-        // so a standalone game can load + tick Logia scripts without pulling
-        // in the renderer/audio chain. bootstrapEntityCore registers
-        // EntitySubSystem + Transform / Health / etc. component types —
-        // skipping bootstrapModule() avoids pulling the render systems
-        // (renderer/AYShader) which a non-graphical app would otherwise need
-        // to link. Hot reload is intentionally OFF — standalone games
-        // restart on .logia changes; dev workflows use the Editor.
-        ayt::entity::bootstrapEntityCore();
-        ayt::game::GameLoop::instance().registerSubSystem(
-            new ayt::script::ScriptSubSystem());
-
-        // INT-02 (2026-07-15): Logia `input.is_pressed(name)` reads
-        // AYDevice InputMapping via DeviceInputProvider. Application
-        // owns its DeviceSubSystem (vs Editor's stack-local
-        // DeviceManager hoist in AYEditorApp.cpp); static provider
-        // holds a raw pointer to DeviceSubSystem::findRegistered()'s
-        // internal DeviceManager. Lifetime safety: ScriptSubSystem::
-        // shutdown() defensively calls setInputProvider(nullptr)
-        // before bridge.shutdown() (INT-02 follow-up to the
-        // descriptor-deps fix), so when GameLoop::clearAll deletes
-        // the DeviceSubSystem first the bridge has already dropped
-        // the reference.
+        // INT-02: Script ← DeviceInputProvider. Lifetime: static provider
+        // points at DeviceSubSystem's manager; ScriptSubSystem::shutdown
+        // clears the provider before Device is destroyed.
         if (auto* devSub = ayt::device::DeviceSubSystem::findRegistered()) {
-            auto* sub = ayt::game::SubSystemRegistry::instance()
-                           .findSubSystem("ayt.script.runtime");
+            auto* sub = engineHost().findSubSystem("ayt.script.runtime");
             if (auto* scriptSub =
                     dynamic_cast<ayt::script::ScriptSubSystem*>(sub)) {
                 static ayt::device::DeviceInputProvider s_provider(
@@ -172,38 +154,12 @@ public:
                 scriptSub->bridge().setInputProvider(&s_provider);
             }
         }
-
-        // Audio is a presentation module — Server builds skip it (matches
-        // AYAudio/design.md §1.2 non-goal "Run on Server build"). Until the
-        // build-target flag infra lands, we treat `noAudio` as the only gate.
-        if (_cmdLine.noAudio) {
-            return;
-        }
-
-        auto audioSub = std::make_unique<ayt::audio::AudioSubSystem>();
-        audioSub->setBackend(ayt::audio::makeMiniaudioBackend());
-        // Ownership transfers to the GameLoop / SubSystemRegistry, which
-        // deletes via the ISubSystem base pointer on shutdown.
-        ayt::game::GameLoop::instance().registerSubSystem(audioSub.release());
-    }
-
-    // Create the window + input devices and register "Device" (priority 0, so
-    // it initializes and polls first). The window it owns is exposed to the
-    // renderer via RendererSubSystem::setWindowProvider(makeWindowProvider())
-    // — wired by the client that also registers the renderer, keeping this
-    // module free of the render/bgfx dependency.
-    void registerDeviceSubSystem()
-    {
-        ayt::device::DeviceConfig config{};
-        config.window.title  = _desc.name;
-        config.window.width  = static_cast<int>(_desc.width);
-        config.window.height = static_cast<int>(_desc.height);
-        ayt::device::DeviceSubSystem::setBootstrapConfig(config);
-        ayt::device::DeviceSubSystem::registerSubSystem();
     }
 
     void run() override
     {
+        EngineHostScope hostScope(defaultEngineHost());
+
         auto& loop = ayt::game::GameLoop::instance();
         loop.setTargetFPS(_desc.targetFPS);
         loop.setRenderThreadEnabled(_desc.enableRenderThread);
@@ -228,6 +184,11 @@ public:
         return ayt::event::EventBus::instance();
     }
 
+    IEngineHost& engineHost() override
+    {
+        return defaultEngineHost();
+    }
+
 private:
     GameDesc       _desc;
     AppCommandLine _cmdLine;
@@ -247,6 +208,11 @@ std::unique_ptr<IApplication> IApplication::create(const GameDesc& desc,
                                                    const AppCommandLine& cmdLine)
 {
     return std::make_unique<ApplicationImpl>(desc, cmdLine);
+}
+
+IEngineHost& IApplication::engineHost()
+{
+    return defaultEngineHost();
 }
 
 } // namespace ayt::app

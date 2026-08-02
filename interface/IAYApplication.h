@@ -19,6 +19,8 @@ class EventBus;
 namespace ayt::app
 {
 
+class IEngineHost;
+
 // =============================================================================
 // GameDesc - 应用描述符
 // =============================================================================
@@ -128,6 +130,10 @@ public:
     // ScopedConnection with your own lifetime; do NOT call
     // EventBus::unsubscribeAll() during shutdown — Phase 4 lesson).
     virtual ayt::event::EventBus& eventBus() = 0;
+
+    // Engine shell (Step 1): GameLoop / EventBus / findSubSystem.
+    // Default = process defaultEngineHost(); see docs/engine-host.md.
+    virtual IEngineHost& engineHost();
 
     // 版本信息
     virtual const char* getVersion() const = 0;

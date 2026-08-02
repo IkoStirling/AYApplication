@@ -39,10 +39,10 @@ add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})
 # EventBusScopeTest - standalone EventBusHostScope tests
 # -----------------------------------------------------------------------------
 # The main AYApplicationTest exe pulls in the full AYApplication library, which
-# transitively drags AYAudio â†?bgfx/bimg â†?tinyexr symbols colliding with
+# transitively drags AYAudio ? bgfx/bimg ? tinyexr symbols colliding with
 # basisu_encoder.lib. That collision is pre-existing on baseline main and is
 # unrelated to this commit. To verify EventBusHostScope independently, this
-# target links ONLY the bits it needs (no AYApplication â†?no AYAudio â†?no bimg).
+# target links ONLY the bits it needs (no AYApplication ? no AYAudio ? no bimg).
 # It compiles AYAppEventHost.cpp directly from the lib source so we don't have
 # to expose it as a separate library.
 # -----------------------------------------------------------------------------
@@ -67,5 +67,34 @@ target_compile_options(EventBusScopeTest PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
 
-ay_configure_test_tmpdir(${PROJECT_NAME})
+ay_configure_test_tmpdir(EventBusScopeTest)
 add_test(NAME EventBusScopeTest COMMAND EventBusScopeTest)
+
+# -----------------------------------------------------------------------------
+# EngineHostTest - IEngineHost without linking full AYApplication (same reason
+# as EventBusScopeTest: avoid AYAudio/bimg tinyexr collision on the leaf exe).
+# -----------------------------------------------------------------------------
+add_executable(EngineHostTest
+    TestMain.cpp
+    Test_EngineHost.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/AYEngineHost.cpp
+)
+
+target_include_directories(EngineHostTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../interface
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../AYCore/include
+)
+
+target_link_libraries(EngineHostTest PRIVATE
+    AYGameLoop
+    AYEventSystem
+    AYTest
+)
+
+target_compile_options(EngineHostTest PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+
+ay_configure_test_tmpdir(EngineHostTest)
+add_test(NAME EngineHostTest COMMAND EngineHostTest)

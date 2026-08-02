@@ -2,6 +2,8 @@
 
 > **输入子系统（2026-07-11）**：Client 侧仅注册 **`DeviceSubSystem`**（`AYDevice`：窗口 + 输入轮询 + `InputMapping`）。**无** `InputSubSystem` / **`AYInput`** 模块 — 见 [`AYDevice/design.md` §1.3](../AYDevice/design.md)。
 
+> **引擎外壳 Step 1（2026-08-02）**：装配表 + 薄 `IEngineHost` — 见 [`docs/engine-host.md`](docs/engine-host.md)。Client 用 `registerDefaultClientModules`；Editor 用 `ayt::editor::registerDefaultEditorModules`。
+
 ## 1. 概述
 
 AYApplication 是 AY Engine 的**应用入口层**，负责：

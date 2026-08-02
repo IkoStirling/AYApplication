@@ -8,11 +8,15 @@ project(AYApplication
 set(SOURCES
     src/AYApplicationImpl.cpp
     src/AYAppEventHost.cpp
+    src/AYEngineHost.cpp
+    src/AYRegisterDefaultModules.cpp
 )
 
 set(HEADERS
     interface/IAYApplication.h
     interface/AYAppEventHost.h
+    interface/IEngineHost.h
+    interface/AYRegisterDefaultModules.h
     include/AYApplication.h
 )
 
@@ -37,6 +41,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     PRIVATE AYAudio
     PRIVATE AYDeviceSubSystem
     PRIVATE AYScript
+    # Entity comes via AYScript (bootstrapEntityCore). EventBus via GameLoop.
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
@@ -47,4 +52,4 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 enable_testing()
 add_subdirectory(unittest)
 
-message(STATUS "AYApplication v0.1.0 (EventBusHostScope + INT-01/02 ship) — see ${CMAKE_CURRENT_SOURCE_DIR}/design.md")
+message(STATUS "AYApplication v0.1.0 (EngineHost Step 1 + EventBusHostScope) — see ${CMAKE_CURRENT_SOURCE_DIR}/docs/engine-host.md")
