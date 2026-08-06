@@ -72,7 +72,9 @@ add_test(NAME EventBusScopeTest COMMAND EventBusScopeTest)
 
 # -----------------------------------------------------------------------------
 # EngineHostTest - service registry contract (FakeHost; no DefaultEngineHost /
-# AYResource/AYAudio � avoids tinyexr collision on this leaf exe).
+# AYResource/AYAudio � avoids tinyexr collision on this leaf exe).
+# PR-6 (v0.1.3): Test_EngineHost.cpp 的 scenes() facade cases 调 SceneManager::instance()，
+# 所以 EngineHostTest 必须 link AYScene（与 AYGameLoop/AYEventSystem 同形态 PRIVATE）。
 # -----------------------------------------------------------------------------
 add_executable(EngineHostTest
     TestMain.cpp
@@ -90,6 +92,8 @@ target_link_libraries(EngineHostTest PRIVATE
     AYGameLoop
     AYEventSystem
     AYTest
+    # PR-6 (v0.1.3): Test_EngineHost 调 SceneManager::instance() → AYScene 必需。
+    AYScene
 )
 
 target_compile_options(EngineHostTest PRIVATE

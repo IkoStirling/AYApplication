@@ -28,6 +28,11 @@ namespace ayt::audio
 class AudioEngine;
 }
 
+namespace ayt::scene
+{
+class SceneManager;
+}
+
 namespace ayt::app
 {
 
@@ -37,6 +42,8 @@ namespace ayt::app
 inline constexpr const char* kHostServiceResources = "ayt.resource.ResourceManager";
 inline constexpr const char* kHostServicePhysics   = "ayt.physics.PhysicsManager";
 inline constexpr const char* kHostServiceAudio     = "ayt.audio.AudioEngine";
+// PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家。
+inline constexpr const char* kHostServiceScenes    = "ayt.scene.SceneManager";
 
 /// Process-scoped engine host: assembly + service discovery (not a gameplay module).
 class IEngineHost {
@@ -76,6 +83,13 @@ public:
     virtual ayt::physics::PhysicsManager* physics() = 0;
     /// Audio engine when AudioSubSystem is registered and initialized; else provided pointer.
     virtual ayt::audio::AudioEngine* audio() = 0;
+    /// 关卡生命周期管家（design §10 Q-F 收口；v0.1.3）。
+    /// Meyers singleton — **永不为 null**（与 physics()/audio() 的「未 provide 则 nullptr」
+    /// 语义不同；SM 进程内必存在）。替代访问路径：
+    /// `host.service<ayt::scene::SceneManager>(kHostServiceScenes)`。
+    /// 提供 process-wide 的 current / setEdit / beginPlay / endPlay / tick / 诊断字段
+    ///（详见 `AYSceneManager.h`）。
+    virtual ayt::scene::SceneManager* scenes() = 0;
 };
 
 /// Default process-wide host.

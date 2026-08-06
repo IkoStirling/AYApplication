@@ -1,8 +1,8 @@
 # Engine Host — 装配与服务约定
 
-**Status:** Step 1（装配）+ **服务面**（`resources` / `physics` / `audio` + 可扩展键表）  
+**Status:** Step 1（装配）+ **服务面**（`resources` / `physics` / `audio` / `scenes` + 可扩展键表）  
 **Owner:** `AYApplication`  
-**Related:** [`../design.md`](../design.md) · [`../../AYGameLoop/docs/sim-present-time.md`](../../AYGameLoop/docs/sim-present-time.md)
+**Related:** [`../design.md`](../design.md) · [`../../AYGameLoop/docs/sim-present-time.md`](../../AYGameLoop/docs/sim-present-time.md) · [`../../AYScene/design.md`](../../AYScene/design.md)
 
 本文件定义**引擎外壳**：默认 SubSystem 装配、`IEngineHost` 服务发现、以及**以后加新单例/服务时必须走的登记流程**。
 
@@ -56,9 +56,16 @@ if (!host) { /* outside Application::run */ }
 ayt::resource::ResourceManager* res = host->resources();   // 通常非空（单例回退）
 ayt::physics::PhysicsManager*   phys = host->physics();  // 未 provide 则为 nullptr
 ayt::audio::AudioEngine*        aud = host->audio();     // SubSystem 未 init 前可能为 nullptr
+// PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家
+ayt::scene::SceneManager*       scenes = host->scenes(); // 永不为 null（Meyers singleton）
 
 if (phys) {
     phys->step(dt);
+}
+
+if (scenes) {  // 防御性写法；实际不会 nullptr（Meyers singleton）
+    if (scenes->canBeginPlay()) { /* enable Play button */ }
+    scenes->tick(dt);
 }
 
 // 通用键（新服务 / 游戏自有服务）
@@ -71,6 +78,7 @@ auto* inv = host->service<InventorySystem>("game.inventory");
 | `resources()` | 已 `provide` 的指针，否则回退 `ResourceManager::instance()` |
 | `physics()` | **仅**登记表；PhysicsManager 非进程单例，谁 `create` 谁 `provide` |
 | `audio()` | 登记表，或惰性从名为 `"Audio"` 的 SubSystem 取 `engine()` |
+| `scenes()` | PR-6 (v0.1.3)：已 `provide` 的指针，否则回退 `SceneManager::instance()`（**永不为 null**） |
 | `findSubSystem(name)` | 逃生口；新代码优先具名/键服务，不要靠字符串找业务 API |
 
 `ApplicationImpl::run` / `EditorApp::run` 内使用 `EngineHostScope`；装配后调用 `bindBuiltinHostServices`。
@@ -113,6 +121,7 @@ auto* inv = host->service<InventorySystem>("game.inventory");
 | `kHostServiceResources` | `ayt.resource.ResourceManager` | `ResourceManager*` | `bindBuiltinHostServices`；`resources()` 另有 instance 回退 | 几乎不应为空 |
 | `kHostServicePhysics` | `ayt.physics.PhysicsManager` | `PhysicsManager*` | 创建该 manager 的 App/玩法 | 未创建物理会话 |
 | `kHostServiceAudio` | `ayt.audio.AudioEngine` | `AudioEngine*` | bind 时若已 init；否则 `audio()` 惰性查 SubSystem | 无 Audio 模块或尚未 initialize |
+| `kHostServiceScenes` | `ayt.scene.SceneManager` | `SceneManager*` | `bindBuiltinHostServices`（PR-6 v0.1.3，Meyers singleton）；`scenes()` 另有 instance 回退 | 几乎不应为空（单例） |
 
 **新增行时：** 改代码键常量 + 改本表 +（若有）具名 API，同一 PR。
 

@@ -3,6 +3,7 @@
 #include <AYAudioSubSystem.h>
 #include <AYGameLoop.h>
 #include <AYResourceManager.h>
+#include <AYSceneManager.h>  // PR-6 (v0.1.3): scenes() facade
 #include <AYSubSystemRegistry.h>
 #include <ayevent/EventBus.h>
 
@@ -92,6 +93,19 @@ public:
         return nullptr;
     }
 
+    // PR-6 (v0.1.3): scenes() facade — key+fallback 双路径（mirror resources()）。
+    // findService(kHostServiceScenes) 若找到返之；否则 fallback 到 singleton。
+    // clearProvidedServices() 后 service<T>(key) 返 nullptr，但 scenes() 仍 OK
+    // （与 resources() 行为对齐）。
+    ayt::scene::SceneManager* scenes() override
+    {
+        if (auto* p = static_cast<ayt::scene::SceneManager*>(
+                findService(kHostServiceScenes))) {
+            return p;
+        }
+        return &ayt::scene::SceneManager::instance();
+    }
+
 private:
     mutable std::mutex _mutex;
     std::unordered_map<std::string, void*> _services;
@@ -115,6 +129,9 @@ void bindBuiltinHostServices(IEngineHost& host)
             host.provide(kHostServiceAudio, eng);
         }
     }
+    // PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家注册。
+    host.provide(kHostServiceScenes, &ayt::scene::SceneManager::instance());
+
     // PhysicsManager is not a process singleton — call sites provide when created:
     //   host.provide(kHostServicePhysics, physicsManager.get());
 }
