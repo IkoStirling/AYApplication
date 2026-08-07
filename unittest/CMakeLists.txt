@@ -30,6 +30,31 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
 
+# -----------------------------------------------------------------------------
+# bimg_decode / basisu_encoder tinyexr LNK2005 fix (mirror of AYEditor).
+# -----------------------------------------------------------------------------
+# Background: AYRenderer (PRIVATE) → bgfx::bimg_decode pulls tinyexr into
+# AYApplicationTest's link line. AYResource transitively pulls
+# basisu_encoder.lib (via assimp-vc145-mtd.lib), which also contains tinyexr.
+# The linker errors on the duplicate tinyexr symbols even though both copies
+# are bit-identical (bgfx vendors tinyexr; basisu ships a snapshot of the
+# same code).
+#
+# The demos (AYSuzanneSkinned_Demo.exe, AYRenderer_Demo.exe) link the same
+# pair without LNK2005 because they predate the AYApplication module.
+# /FORCE:MULTIPLE + /IGNORE:4005,4006 is the narrowest workaround that
+# touches only this test target and doesn't perturb AYRenderer's semantics
+# for the working demos. See AYEditor/unittest/CMakeLists.txt for the
+# original ship (2026-08-07 ish).
+# -----------------------------------------------------------------------------
+if(MSVC)
+    target_link_options(${PROJECT_NAME} PRIVATE
+        "/FORCE:MULTIPLE"
+        "/IGNORE:4005"   # duplicate definition treated as warning
+        "/IGNORE:4006"   # duplicate definition treated as warning
+    )
+endif()
+
 # Register with ctest so `ctest` picks up the binary automatically.
 enable_testing()
 ay_configure_test_tmpdir(${PROJECT_NAME})
