@@ -1,7 +1,14 @@
 // Test_EngineHost.cpp — service registry without linking DefaultEngineHost builtins
+//
+// v0.3 PR-4 (AYScene): SceneManager::instance() [[deprecated]]；本文件
+// 是 EngineHost fixture 测试，line 144/154 两处用 instance() 取 singleton
+// 验证 facade 行为。豁免范围合理（fixture 准备）。
 
 #include "AYTest.h"
 #include <IEngineHost.h>
+#include <DeprecatedSuppress.h>
+
+AY_DEPRECATED_SUPPRESS_BEGIN
 
 #include <AYGameLoop.h>
 #include <AYSceneManager.h>  // PR-6 (v0.1.3): scenes() facade
@@ -164,3 +171,5 @@ TEST_CASE(host_scenes_clear_provided_services_drops_key_only)
 }
 
 TEST_SUITE_END
+
+AY_DEPRECATED_SUPPRESS_END
