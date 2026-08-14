@@ -5,12 +5,19 @@
 #include <AYDeviceSubSystem.h>
 #include <AYEntityModule.h>
 #include <AYGameLoop.h>
+#include <AYRendererSubSystem.h>
 #include <AYScriptSubSystem.h>
 
 #include <memory>
 
 namespace ayt::app
 {
+
+void registerEntityPresentationStack()
+{
+    ayt::entity::bootstrapModule();
+    ayt::render::RendererSubSystem::registerSubSystem();
+}
 
 void registerDefaultClientModules(const ClientModuleOptions& options)
 {
@@ -21,8 +28,12 @@ void registerDefaultClientModules(const ClientModuleOptions& options)
     ayt::device::DeviceSubSystem::setBootstrapConfig(config);
     ayt::device::DeviceSubSystem::registerSubSystem();
 
-    // Entity core only — no renderer/skinned systems (standalone client).
-    ayt::entity::bootstrapEntityCore();
+    if (options.enablePresentation) {
+        registerEntityPresentationStack();
+    } else {
+        // Entity core only — no renderer/skinned systems (standalone / headless).
+        ayt::entity::bootstrapEntityCore();
+    }
 
     ayt::game::GameLoop::instance().registerSubSystem(
         new ayt::script::ScriptSubSystem());

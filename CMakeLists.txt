@@ -48,6 +48,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     # 但 AYScene 不暴露给 AYApplication 下游（AYEditor / AYEditorShell_Demo /
     # AYEditorShutdownRepro）的 link line —— 与 PRIVATE AYResource 模式一致。
     PRIVATE AYScene
+    # P0 Client presentation option: RendererSubSystem registration.
+    PRIVATE AYRenderer
     # Entity comes via AYScript (bootstrapEntityCore). EventBus via GameLoop.
     # AYResource: DefaultEngineHost::resources() / bindBuiltinHostServices.
     # AYScene: DefaultEngineHost::scenes() / bindBuiltinHostServices (PR-6 v0.1.3).

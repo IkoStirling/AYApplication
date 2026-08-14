@@ -104,6 +104,10 @@ void setCurrentEngineHost(IEngineHost* host);
 /// Call after default module registration (and again after GameLoop init if audio was null).
 void bindBuiltinHostServices(IEngineHost& host);
 
+/// P1: register a PhysicsManager into the host service table (`kHostServicePhysics`).
+/// Physics is not a process singleton — call after `PhysicsManager::create`.
+void providePhysics(IEngineHost& host, ayt::physics::PhysicsManager* manager);
+
 /// RAII: sets currentEngineHost for the duration of Application::run.
 class EngineHostScope {
 public:

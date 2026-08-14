@@ -143,8 +143,14 @@ void bindBuiltinHostServices(IEngineHost& host)
     host.provide(kHostServiceScenes, &ayt::scene::SceneManager::instance());
     AY_DEPRECATED_SUPPRESS_END
 
-    // PhysicsManager is not a process singleton — call sites provide when created:
-    //   host.provide(kHostServicePhysics, physicsManager.get());
+    // PhysicsManager is not a process singleton — call providePhysics() when created:
+    //   auto mgr = PhysicsManager::create(desc);
+    //   providePhysics(host, mgr.get());
+}
+
+void providePhysics(IEngineHost& host, ayt::physics::PhysicsManager* manager)
+{
+    host.provide(kHostServicePhysics, manager);
 }
 
 } // namespace ayt::app

@@ -9,6 +9,9 @@
 
 #include <AYDeviceSubSystem.h>
 #include <AYDeviceInputProvider.h>
+#include <AYEntityModule.h>
+#include <AYScene.h>
+#include <AYSceneManager.h>
 #include <AYScriptSubSystem.h>
 #include <AYSubSystemRegistry.h>
 
@@ -16,6 +19,7 @@
 #include <AYAppEventHost.h>
 
 #include <cstdio>
+#include <memory>
 
 namespace ayt::app
 {
@@ -61,6 +65,8 @@ AppCommandLine AppCommandLine::parse(int argc, char* argv[])
             cmd.assetRoot = argv[++i];
         } else if (arg == "-user-data" && i + 1 < argc) {
             cmd.userDataPath = argv[++i];
+        } else if (arg == "-scene" && i + 1 < argc) {
+            cmd.scenePath = argv[++i];
         } else {
             cmd.unknownArgs.push_back(argv[i]);
         }
@@ -83,6 +89,7 @@ void AppCommandLine::printHelp(const char* appName) const
     std::printf("  -config <path>         Set config file path\n");
     std::printf("  -asset-root <path>     Set asset root directory\n");
     std::printf("  -user-data <path>      Set user data directory\n");
+    std::printf("  -scene <path>          Load startup .ayscene (Client)\n");
     std::printf("  -no-audio              Disable audio system\n");
 }
 
@@ -120,6 +127,9 @@ public:
         if (!_cmdLine.userDataPath.empty()) {
             _desc.userDataPath = _cmdLine.userDataPath.c_str();
         }
+        if (!_cmdLine.scenePath.empty()) {
+            _desc.scenePath = _cmdLine.scenePath.c_str();
+        }
     }
 
     const GameDesc& getDesc() const override { return _desc; }
@@ -140,6 +150,7 @@ public:
         opts.windowWidth = static_cast<int>(_desc.width);
         opts.windowHeight = static_cast<int>(_desc.height);
         opts.enableAudio = !_cmdLine.noAudio;
+        opts.enablePresentation = _desc.enablePresentation;
         registerDefaultClientModules(opts);
         bindBuiltinHostServices(engineHost());
 
@@ -167,9 +178,11 @@ public:
 
         onInit();
         registerSubSystems();
+        bootstrapClientPlayScene();
         loop.run();
 
         onPreShutdown();
+        teardownClientPlayScene();
         loop.shutdown();
         // Phase 4 (a8c8be9) lesson applied: the host application, not
         // GameLoop, owns the per-instance EventBus listener cleanup.
@@ -191,8 +204,51 @@ public:
     }
 
 private:
+    /// P0 Client: own a Play Scene, optionally load `.ayscene`, setCurrent so
+    /// World::instance() / EntitySubSystem tick the Scene World (not the
+    /// process fallback). Re-bootstrap systems onto the active World when
+    /// presentation is enabled (first bootstrap may have targeted fallback).
+    void bootstrapClientPlayScene()
+    {
+        auto* sm = engineHost().scenes();
+        if (sm == nullptr) {
+            return;
+        }
+
+        _clientScene = std::make_unique<ayt::scene::Scene>(
+            ayt::scene::SceneMode::Play,
+            _desc.name ? _desc.name : "Client");
+
+        if (_desc.scenePath != nullptr && _desc.scenePath[0] != '\0') {
+            ayt::serializer::SerializeError err{};
+            if (!_clientScene->load(_desc.scenePath, &err)) {
+                std::fprintf(stderr,
+                    "[Application] failed to load scene '%s'\n",
+                    _desc.scenePath);
+            }
+        }
+
+        sm->setCurrent(_clientScene.get());
+
+        if (_desc.enablePresentation) {
+            // Systems register via World::instance() → now the Play Scene.
+            ayt::entity::bootstrapModule();
+        }
+    }
+
+    void teardownClientPlayScene()
+    {
+        if (auto* sm = engineHost().scenes()) {
+            if (sm->current() == _clientScene.get()) {
+                sm->setCurrent(nullptr);
+            }
+        }
+        _clientScene.reset();
+    }
+
     GameDesc       _desc;
     AppCommandLine _cmdLine;
+    std::unique_ptr<ayt::scene::Scene> _clientScene;
 
     // Host-owned EventBus subscriptions (Phase 4 §a8c8be9 lesson).
     // Connect listeners here instead of holding raw ScopedConnection

@@ -28,17 +28,23 @@
 | 顺序 | 步骤 | 说明 |
 |------|------|------|
 | 1 | `DeviceSubSystem` | 窗口 + 输入 |
-| 2 | `bootstrapEntityCore()` | Entity 核心，不拉渲染 |
+| 2a | `bootstrapEntityCore()` | 默认：Entity 核心，不拉渲染 |
+| 2b | `registerEntityPresentationStack()` | `enablePresentation=true`：`bootstrapModule` + `RendererSubSystem` |
 | 3 | `ScriptSubSystem` | Logia |
 | 4 | `AudioSubSystem`（可选） | `-no-audio` 则跳过 |
 | 5 | `bindBuiltinHostServices` | 写入 Host 服务表 |
+| 6 | Client Play Scene | `ApplicationImpl` 创建 `Scene(Play)`，可选 `-scene` / `GameDesc::scenePath` load，`setCurrent` → `World::instance()` 指向 Scene World |
+
+**World 权威（P0）：** `SceneManager::setCurrent` 调用 `World::setActiveWorld(&scene.world())`。`EntitySubSystem::update` 走 `World::instance()`，因此 **不要** 再对同一 World 调 `scenes()->tick(dt)`（会双 tick）。`scenes()->tick` 仅给 Preview / 显式旁路用。
 
 ### 2.2 Editor（`registerDefaultEditorModules`）
 
 | 顺序 | 步骤 |
 |------|------|
-| 1–4 | Entity full + Network + Renderer + Script |
-| 5 | `bindBuiltinHostServices`（+ Editor 自有 Device 桥接仍在 App 内） |
+| 1 | `registerEntityPresentationStack()`（与 Client `enablePresentation` 共用） |
+| 2 | Network + Script |
+| 3 | `bindBuiltinHostServices`（+ Editor 自有 Device 桥接仍在 App 内） |
+| 4 | Play：`beginPlay` 后再次 `bootstrapModule()`（系统落到 Play Scene World） |
 
 ### 2.3 Server（未来）
 
@@ -76,12 +82,19 @@ auto* inv = host->service<InventorySystem>("game.inventory");
 | API | 含义 |
 |-----|------|
 | `resources()` | 已 `provide` 的指针，否则回退 `ResourceManager::instance()` |
-| `physics()` | **仅**登记表；PhysicsManager 非进程单例，谁 `create` 谁 `provide` |
+| `physics()` | **仅**登记表；PhysicsManager 非进程单例，谁 `create` 谁 `provide`（见 `providePhysics`） |
 | `audio()` | 登记表，或惰性从名为 `"Audio"` 的 SubSystem 取 `engine()` |
 | `scenes()` | PR-6 (v0.1.3)：已 `provide` 的指针，否则回退 `SceneManager::instance()`（**永不为 null**） |
 | `findSubSystem(name)` | 逃生口；新代码优先具名/键服务，不要靠字符串找业务 API |
 
 `ApplicationImpl::run` / `EditorApp::run` 内使用 `EngineHostScope`；装配后调用 `bindBuiltinHostServices`。
+
+创建 physics 时：
+
+```cpp
+auto mgr = ayt::physics::PhysicsManager::create(desc);
+ayt::app::providePhysics(host, mgr.get());  // host->physics() 非空
+```
 
 ---
 

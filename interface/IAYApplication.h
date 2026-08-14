@@ -35,6 +35,10 @@ struct GameDesc {
     const char* configFile = "";            // 配置文件路径
     const char* assetRoot = "./assets";     // 资源根目录
     const char* userDataPath = "";          // 用户数据目录
+    /// Optional startup `.ayscene` path (Client P0). Empty = empty Play Scene.
+    const char* scenePath = "";
+    /// When true, Client registers full ECS render systems + RendererSubSystem.
+    bool enablePresentation = false;
 };
 
 // =============================================================================
@@ -55,6 +59,8 @@ struct AppCommandLine {
     std::string configFile;
     std::string assetRoot;
     std::string userDataPath;
+    /// `-scene <path>` — Client startup `.ayscene`.
+    std::string scenePath;
 
     // 未知参数（保留给子系统）
     std::vector<std::string> unknownArgs;
