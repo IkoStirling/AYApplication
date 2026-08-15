@@ -44,7 +44,7 @@
 | AsyncLoader | ResourceLoadComplete / Failed | `AYEventSystem/README.md` |
 | TaskCompletionHook（本函数安装） | TaskComplete | `AYTask/README.md` |
 | SceneLifecycleEventBridge | Scene begin/end/current | `AYEventSystem` SceneEvents |
-| GameLoop | SimTick / frame events | `AYGameLoopEvents.h` |
+| GameLoop | SimTick / frame events | `AYGameLoop/GameLoopEvents.h` |
 
 **World 权威（P0）：** `SceneManager::setCurrent` 调用 `World::setActiveWorld(&scene.world())`。`EntitySubSystem::update` 走 `World::instance()`，因此 **不要** 再对同一 World 调 `scenes()->tick(dt)`（会双 tick）。`scenes()->tick` 仅给 Preview / 显式旁路用。
 
@@ -128,7 +128,7 @@ ayt::app::providePhysics(host, mgr);
 1. **选稳定键名**  
    - 引擎内置：`ayt.<module>.<Type>`（与现有 `kHostService*` 同风格）  
    - 游戏项目：`game.<name>` / `<studio>.<name>`  
-   - 在 `IEngineHost.h` 增加 `inline constexpr const char* kHostService…`（若为引擎内置）
+   - 在 `AYApplication/IEngineHost.h` 增加 `inline constexpr const char* kHostService…`（若为引擎内置）
 
 2. **更新本文件表格**（§4.2）——键、类型、生命周期、谁负责 `provide`
 
@@ -163,7 +163,7 @@ ayt::app::providePhysics(host, mgr);
 ### 4.3 示例：假设新增 `AYSave::SaveService`
 
 ```cpp
-// IEngineHost.h
+// AYApplication/IEngineHost.h
 inline constexpr const char* kHostServiceSave = "ayt.save.SaveService";
 
 // 装配后

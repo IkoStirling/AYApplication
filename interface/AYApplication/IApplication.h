@@ -1,5 +1,5 @@
 #pragma once
-// IAYApplication.h - 应用接口
+// AYApplication/IApplication.h - 应用接口
 
 #include <AYCore.h>
 #include <string>

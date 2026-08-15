@@ -1,11 +1,11 @@
 #pragma once
-// IEngineHost.h — engine shell: assembly lookup + typed/keyed services
+// AYApplication/IEngineHost.h — engine shell: assembly lookup + typed/keyed services
 //
 // Built-in accessors (resources/physics/audio) are sugar over provideService.
 // New singletons: register a stable key — see docs/engine-host.md §3–§4.
 
-#include <IAYGameLoop.h>
-#include <IHostPluginHooks.h>
+#include <AYGameLoop/IGameLoop.h>
+#include <AYApplication/IHostPluginHooks.h>
 
 #include <string_view>
 
@@ -93,7 +93,7 @@ public:
     /// 语义不同；SM 进程内必存在）。替代访问路径：
     /// `host.service<ayt::scene::SceneManager>(kHostServiceScenes)`。
     /// 提供 process-wide 的 current / setEdit / beginPlay / endPlay / tick / 诊断字段
-    ///（详见 `AYSceneManager.h`）。
+    ///（详见 `AYScene/SceneManager.h`）。
     virtual ayt::scene::SceneManager* scenes() = 0;
 
     // --- Plugin extension points (default no-op; DefaultEngineHost stores hooks) ---

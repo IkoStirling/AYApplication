@@ -6,7 +6,7 @@
 // 测试 fixture / SM 自身单例验证等），不污染 caller。
 //
 // 用法：
-//   #include <DeprecatedSuppress.h>
+//   #include <AYApplication/DeprecatedSuppress.h>
 //   AY_DEPRECATED_SUPPRESS_BEGIN
 //   someCodeThatCallsDeprecated();
 //   AY_DEPRECATED_SUPPRESS_END

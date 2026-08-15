@@ -6,10 +6,10 @@
 
 #include <AYApplication.h>
 #include <AYGameLoop.h>
-#include <AYPhysicsSubSystem.h>
-#include <AYPhysicsTypes.h>
-#include <AYRegisterDefaultModules.h>
-#include <IEngineHost.h>
+#include <AYPhysics/PhysicsSubSystem.h>
+#include <AYPhysics/PhysicsTypes.h>
+#include <AYApplication/RegisterDefaultModules.h>
+#include <AYApplication/IEngineHost.h>
 
 #include <AYTest.h>
 

@@ -1,9 +1,9 @@
-#include <AYSceneLifecycleEventBridge.h>
+#include <AYApplication/SceneLifecycleEventBridge.h>
 
-#include <IEngineHost.h>
+#include <AYApplication/IEngineHost.h>
 
-#include <ayevent/EventBus.h>
-#include <ayevent/Events/SceneEvents.h>
+#include <AYEventSystem/EventBus.h>
+#include <AYEventSystem/Events/SceneEvents.h>
 
 namespace ayt::app
 {

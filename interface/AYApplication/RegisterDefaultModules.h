@@ -1,5 +1,5 @@
 #pragma once
-// AYRegisterDefaultModules.h — default SubSystem assembly tables
+// AYApplication/RegisterDefaultModules.h — default SubSystem assembly tables
 //
 // Client / Server live here. Editor presentation modules live in AYEditor
 // (registerDefaultEditorModules), which reuses registerEntityPresentationStack

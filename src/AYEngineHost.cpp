@@ -1,16 +1,16 @@
-#include <IEngineHost.h>
+#include <AYApplication/IEngineHost.h>
 
-#include <AYAudioSubSystem.h>
+#include <AYAudio/AudioSubSystem.h>
 #include <AYGameLoop.h>
-#include <AYPhysicsSubSystem.h>
-#include <AYResourceManager.h>
-#include <AYSceneLifecycleEventBridge.h>
-#include <AYSceneManager.h>  // PR-6 (v0.1.3): scenes() facade
-#include <AYSubSystemRegistry.h>
-#include <DeprecatedSuppress.h>  // v0.3 PR-4 (AYScene): instance() [[deprecated]] 豁免
-#include <IPhysicsQuery.h>
-#include <ayevent/EventBus.h>
-#include <ayevent/Events/TaskEvents.h>
+#include <AYPhysics/PhysicsSubSystem.h>
+#include <AYResource/ResourceManager.h>
+#include <AYApplication/SceneLifecycleEventBridge.h>
+#include <AYScene/SceneManager.h>  // PR-6 (v0.1.3): scenes() facade
+#include <AYGameLoop/SubSystemRegistry.h>
+#include <AYApplication/DeprecatedSuppress.h>  // v0.3 PR-4 (AYScene): instance() [[deprecated]] 豁免
+#include <AYPhysics/IPhysicsQuery.h>
+#include <AYEventSystem/EventBus.h>
+#include <AYEventSystem/Events/TaskEvents.h>
 #include <AYTask/TaskCompletionHook.h>
 
 #include <algorithm>

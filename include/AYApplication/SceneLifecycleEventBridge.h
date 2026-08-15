@@ -1,7 +1,7 @@
 #pragma once
-// AYSceneLifecycleEventBridge.h — SceneManager observer → EventBus Scene* events
+// AYApplication/SceneLifecycleEventBridge.h — SceneManager observer → EventBus Scene* events
 
-#include <AYSceneLifecycleObserver.h>
+#include <AYScene/SceneLifecycleObserver.h>
 
 namespace ayt::app
 {

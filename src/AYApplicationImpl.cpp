@@ -4,19 +4,19 @@
 #include <AYGameLoop.h>
 #include <AYCore.h>
 
-#include <AYRegisterDefaultModules.h>
-#include <IEngineHost.h>
+#include <AYApplication/RegisterDefaultModules.h>
+#include <AYApplication/IEngineHost.h>
 
-#include <AYDeviceSubSystem.h>
-#include <AYDeviceInputProvider.h>
-#include <AYEntityModule.h>
+#include <AYDevice/DeviceSubSystem.h>
+#include <AYDevice/DeviceInputProvider.h>
+#include <AYEntity/EntityModule.h>
 #include <AYScene.h>
-#include <AYSceneManager.h>
-#include <AYScriptSubSystem.h>
-#include <AYSubSystemRegistry.h>
+#include <AYScene/SceneManager.h>
+#include <AYScript/ScriptSubSystem.h>
+#include <AYGameLoop/SubSystemRegistry.h>
 
-#include <ayevent/EventBus.h>
-#include <AYAppEventHost.h>
+#include <AYEventSystem/EventBus.h>
+#include <AYApplication/AppEventHost.h>
 
 #include <cstdio>
 #include <memory>

@@ -1,5 +1,5 @@
 #pragma once
-// AYAppEventHost.h - Host-side EventBus lifecycle scope (Phase 4 lesson encoded)
+// AYApplication/AppEventHost.h - Host-side EventBus lifecycle scope (Phase 4 lesson encoded)
 //
 // Why this exists
 // ---------------
@@ -27,7 +27,7 @@
 // reach into the bus during the host's destruction. We deliberately hold
 // the raw ids instead, and route unsubscribe through an explicit
 // disconnect() call. This is the same shape the AYGameLoop cleanup hook
-// uses (see AYGameLoopImpl.h onGameEvent) — only RAII wrapper removed.
+// uses (see AYGameLoop/GameLoopImpl.h onGameEvent) — only RAII wrapper removed.
 //
 // Forgotten disconnect() now has a SAFE failure mode: listeners stay
 // registered past host shutdown. The process-singleton EventBus cleans
@@ -35,7 +35,7 @@
 // destruction relative to a forgotten host scope doesn't matter because
 // neither side touches the other.
 
-#include <ayevent/Connection.h>
+#include <AYEventSystem/Connection.h>
 #include <cstddef>
 #include <functional>
 #include <vector>

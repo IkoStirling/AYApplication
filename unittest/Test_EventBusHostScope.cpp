@@ -9,8 +9,8 @@
 // the destructor is dereferencing the bus after static-deinit — exactly the
 // failure mode the memory lesson warns about.
 
-#include <AYAppEventHost.h>
-#include <ayevent/EventBus.h>
+#include <AYApplication/AppEventHost.h>
+#include <AYEventSystem/EventBus.h>
 #include <AYTest.h>
 
 #include <atomic>

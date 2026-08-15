@@ -5,15 +5,15 @@
 // 验证 facade 行为。豁免范围合理（fixture 准备）。
 
 #include "AYTest.h"
-#include <IEngineHost.h>
-#include <DeprecatedSuppress.h>
+#include <AYApplication/IEngineHost.h>
+#include <AYApplication/DeprecatedSuppress.h>
 
 AY_DEPRECATED_SUPPRESS_BEGIN
 
 #include <AYGameLoop.h>
-#include <AYSceneManager.h>  // PR-6 (v0.1.3): scenes() facade
-#include <AYSubSystemRegistry.h>
-#include <ayevent/EventBus.h>
+#include <AYScene/SceneManager.h>  // PR-6 (v0.1.3): scenes() facade
+#include <AYGameLoop/SubSystemRegistry.h>
+#include <AYEventSystem/EventBus.h>
 
 #include <string>
 #include <unordered_map>

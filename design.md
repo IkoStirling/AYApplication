@@ -840,7 +840,7 @@ AYApplication/
 ├── design.md
 ├── CMakeLists.txt
 ├── interface/
-│   └── IAYApplication.h          # 应用接口
+│   └── AYApplication/IApplication.h          # 应用接口
 │   └── AppCommandLine.h           # 命令行结构
 │
 ├── include/

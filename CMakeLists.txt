@@ -15,18 +15,19 @@ set(SOURCES
 )
 
 set(HEADERS
-    interface/IAYApplication.h
-    interface/AYAppEventHost.h
-    interface/IEngineHost.h
-    interface/IHostPluginHooks.h
-    interface/AYRegisterDefaultModules.h
-    include/AYApplication.h
-    include/AYSceneLifecycleEventBridge.h
+    interface/AYApplication/IApplication.h
+    interface/AYApplication/AppEventHost.h
+    interface/AYApplication/IEngineHost.h
+    interface/AYApplication/IHostPluginHooks.h
+    interface/AYApplication/RegisterDefaultModules.h
+    
+    include/AYApplication/SceneLifecycleEventBridge.h
 )
 
 add_library(${PROJECT_NAME} STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(${PROJECT_NAME} PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/interface
 )

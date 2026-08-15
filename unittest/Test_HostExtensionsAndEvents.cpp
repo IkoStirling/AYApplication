@@ -2,19 +2,19 @@
 
 #include <AYApplication.h>
 #include <AYGameLoop.h>
-#include <AYGameLoopEvents.h>
-#include <AYPhysicsSubSystem.h>
-#include <AYPhysicsTypes.h>
-#include <AYRegisterDefaultModules.h>
+#include <AYGameLoop/GameLoopEvents.h>
+#include <AYPhysics/PhysicsSubSystem.h>
+#include <AYPhysics/PhysicsTypes.h>
+#include <AYApplication/RegisterDefaultModules.h>
 #include <AYScene.h>
-#include <AYSceneManager.h>
-#include <DeprecatedSuppress.h>
-#include <IEngineHost.h>
-#include <IHostPluginHooks.h>
-#include <IPhysicsQuery.h>
+#include <AYScene/SceneManager.h>
+#include <AYApplication/DeprecatedSuppress.h>
+#include <AYApplication/IEngineHost.h>
+#include <AYApplication/IHostPluginHooks.h>
+#include <AYPhysics/IPhysicsQuery.h>
 
-#include <ayevent/EventBus.h>
-#include <ayevent/Events/SceneEvents.h>
+#include <AYEventSystem/EventBus.h>
+#include <AYEventSystem/Events/SceneEvents.h>
 
 #include <AYTest.h>
 

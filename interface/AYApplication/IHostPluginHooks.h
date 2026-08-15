@@ -1,5 +1,5 @@
 #pragma once
-// IHostPluginHooks.h — lightweight Host extension points (engine-host.md §6)
+// AYApplication/IHostPluginHooks.h — lightweight Host extension points (engine-host.md §6)
 //
 // Plugins / game modules register here to attach services and subscribe to
 // SimTickEvent / Scene* events via host.eventBus(). This is the Host-side

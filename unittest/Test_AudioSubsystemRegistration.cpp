@@ -14,9 +14,9 @@
 
 #include <AYApplication.h>
 #include <AYGameLoop.h>
-#include <AYAudioSubSystem.h>
-#include <AYAudioBackendFactory.h>
-#include <AYAudioEngine.h>
+#include <AYAudio/AudioSubSystem.h>
+#include <AYAudio/AudioBackendFactory.h>
+#include <AYAudio/AudioEngine.h>
 
 #include <AYTest.h>
 

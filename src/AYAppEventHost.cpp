@@ -6,8 +6,8 @@
 //   - disconnect() — LIFO unsubscribe, idempotent
 //   - detach()     — move ids out into a fresh child scope
 
-#include <AYAppEventHost.h>
-#include <ayevent/EventBus.h>
+#include <AYApplication/AppEventHost.h>
+#include <AYEventSystem/EventBus.h>
 
 namespace ayt::app
 {

@@ -1,14 +1,14 @@
-#include <AYRegisterDefaultModules.h>
+#include <AYApplication/RegisterDefaultModules.h>
 
-#include <AYAudioBackendFactory.h>
-#include <AYAudioSubSystem.h>
-#include <AYDeviceSubSystem.h>
-#include <AYEntityModule.h>
+#include <AYAudio/AudioBackendFactory.h>
+#include <AYAudio/AudioSubSystem.h>
+#include <AYDevice/DeviceSubSystem.h>
+#include <AYEntity/EntityModule.h>
 #include <AYGameLoop.h>
-#include <AYPhysicsSubSystem.h>
-#include <AYPhysicsTypes.h>
-#include <AYRendererSubSystem.h>
-#include <AYScriptSubSystem.h>
+#include <AYPhysics/PhysicsSubSystem.h>
+#include <AYPhysics/PhysicsTypes.h>
+#include <AYRenderer/RendererSubSystem.h>
+#include <AYScript/ScriptSubSystem.h>
 
 #include <memory>
 
