@@ -33,8 +33,18 @@
 | 3 | `ScriptSubSystem` | Logia |
 | 4 | `PhysicsSubSystem`（可选） | `enablePhysics` / `-no-physics`；`fixedUpdate` → `step`+`fetchResults` |
 | 5 | `AudioSubSystem`（可选） | `-no-audio` 则跳过 |
-| 6 | `bindBuiltinHostServices` | 写入 Host 服务表（`physics()` 也可惰性从 SubSystem 取） |
+| 6 | `bindBuiltinHostServices` | 写入 Host 服务表；安装 Scene→EventBus 观察者；安装 AYTask→`TaskCompleteEvent` hook |
 | 7 | Client Play Scene | `ApplicationImpl` 创建 `Scene(Play)`，可选 `-scene` / `GameDesc::scenePath` load，`setCurrent` → `World::instance()` 指向 Scene World |
+
+### 2.1.1 引擎事件生产者（Host 装配后）
+
+| 来源 | 事件 | 文档 |
+|------|------|------|
+| DeviceSubSystem | Window resize/close、DeviceAction | `AYEventSystem/README.md`、`AYDevice/README.md` |
+| AsyncLoader | ResourceLoadComplete / Failed | `AYEventSystem/README.md` |
+| TaskCompletionHook（本函数安装） | TaskComplete | `AYTask/README.md` |
+| SceneLifecycleEventBridge | Scene begin/end/current | `AYEventSystem` SceneEvents |
+| GameLoop | SimTick / frame events | `AYGameLoopEvents.h` |
 
 **World 权威（P0）：** `SceneManager::setCurrent` 调用 `World::setActiveWorld(&scene.world())`。`EntitySubSystem::update` 走 `World::instance()`，因此 **不要** 再对同一 World 调 `scenes()->tick(dt)`（会双 tick）。`scenes()->tick` 仅给 Preview / 显式旁路用。
 

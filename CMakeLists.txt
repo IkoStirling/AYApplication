@@ -46,6 +46,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     PRIVATE AYDeviceSubSystem
     PRIVATE AYScript
     PRIVATE AYResource
+    PRIVATE AYTask
     # PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家 facade.
     # DEFAULT-ENGINE-HOST-INSIDE-ONLY: bindBuiltinHostServices 注册 SceneManager，
     # 但 AYScene 不暴露给 AYApplication 下游（AYEditor / AYEditorShell_Demo /

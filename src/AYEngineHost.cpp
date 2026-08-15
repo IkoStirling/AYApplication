@@ -10,6 +10,8 @@
 #include <DeprecatedSuppress.h>  // v0.3 PR-4 (AYScene): instance() [[deprecated]] 豁免
 #include <IPhysicsQuery.h>
 #include <ayevent/EventBus.h>
+#include <ayevent/Events/TaskEvents.h>
+#include <aytask/TaskCompletionHook.h>
 
 #include <algorithm>
 #include <mutex>
@@ -191,6 +193,18 @@ ayt::event::EventBus& resolveEventBus()
     return ayt::event::EventBus::instance();
 }
 
+namespace {
+
+void postTaskCompleteToEventBus(const ayt::task::TaskCompletionNotice& n)
+{
+    ayt::event::TaskCompleteEvent ev{};
+    ev.taskId = reinterpret_cast<uint64_t>(n.task);
+    ev.ok = (n.task != nullptr) && !n.cancelled;
+    ayt::event::EventBus::instance().post(ev);
+}
+
+} // namespace
+
 void bindBuiltinHostServices(IEngineHost& host)
 {
     host.provide(kHostServiceResources, &ayt::resource::ResourceManager::instance());
@@ -208,6 +222,9 @@ void bindBuiltinHostServices(IEngineHost& host)
     if (auto* sm = host.scenes()) {
         sm->setLifecycleObserver(&SceneLifecycleEventBridge::instance());
     }
+
+    // AYTask completion → EventBus (Task stays EventSystem-free via hook).
+    ayt::task::setTaskCompletionHook(&postTaskCompleteToEventBus);
 
     if (auto* physSub = ayt::physics::PhysicsSubSystem::findRegistered()) {
         if (auto* mgr = physSub->manager()) {
