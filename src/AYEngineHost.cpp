@@ -11,7 +11,7 @@
 #include <IPhysicsQuery.h>
 #include <ayevent/EventBus.h>
 #include <ayevent/Events/TaskEvents.h>
-#include <aytask/TaskCompletionHook.h>
+#include <AYTask/TaskCompletionHook.h>
 
 #include <algorithm>
 #include <mutex>

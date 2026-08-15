@@ -55,8 +55,9 @@
 | 1 | `registerEntityPresentationStack()`（与 Client `enablePresentation` 共用） |
 | 2 | `registerPhysicsModule()` |
 | 3 | Network + Script |
-| 4 | `bindBuiltinHostServices`（+ Editor 自有 Device 桥接仍在 App 内） |
-| 5 | Play：`beginPlay` 后再次 `bootstrapModule()`（系统落到 Play Scene World） |
+| 4 | `AudioSubSystem`（可选；`-no-audio` 则跳过；Miniaudio，供 Tools → Audio Editor） |
+| 5 | `bindBuiltinHostServices`（+ Editor 自有 Device 桥接仍在 App 内） |
+| 6 | Play：`beginPlay` 后再次 `bootstrapModule()`（系统落到 Play Scene World） |
 
 ### 2.3 Server（`registerDefaultServerModules` / `-server`）
 
