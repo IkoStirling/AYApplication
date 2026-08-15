@@ -5,6 +5,8 @@
 #include <AYDeviceSubSystem.h>
 #include <AYEntityModule.h>
 #include <AYGameLoop.h>
+#include <AYPhysicsSubSystem.h>
+#include <AYPhysicsTypes.h>
 #include <AYRendererSubSystem.h>
 #include <AYScriptSubSystem.h>
 
@@ -17,6 +19,19 @@ void registerEntityPresentationStack()
 {
     ayt::entity::bootstrapModule();
     ayt::render::RendererSubSystem::registerSubSystem();
+}
+
+void registerPhysicsModule()
+{
+    registerPhysicsModule(ayt::physics::PhysicsBackendDescriptor{});
+}
+
+void registerPhysicsModule(const ayt::physics::PhysicsBackendDescriptor& desc)
+{
+    if (ayt::physics::PhysicsSubSystem::findRegistered() != nullptr) {
+        return;
+    }
+    ayt::physics::PhysicsSubSystem::registerSubSystem(desc);
 }
 
 void registerDefaultClientModules(const ClientModuleOptions& options)
@@ -35,6 +50,10 @@ void registerDefaultClientModules(const ClientModuleOptions& options)
         ayt::entity::bootstrapEntityCore();
     }
 
+    if (options.enablePhysics) {
+        registerPhysicsModule();
+    }
+
     ayt::game::GameLoop::instance().registerSubSystem(
         new ayt::script::ScriptSubSystem());
 
@@ -45,6 +64,21 @@ void registerDefaultClientModules(const ClientModuleOptions& options)
     auto audioSub = std::make_unique<ayt::audio::AudioSubSystem>();
     audioSub->setBackend(ayt::audio::makeMiniaudioBackend());
     ayt::game::GameLoop::instance().registerSubSystem(audioSub.release());
+}
+
+void registerDefaultServerModules(const ServerModuleOptions& options)
+{
+    // No Device / Audio / Renderer — headless sim authority only.
+    ayt::entity::bootstrapEntityCore();
+
+    if (options.enablePhysics) {
+        registerPhysicsModule();
+    }
+
+    if (options.enableScript) {
+        ayt::game::GameLoop::instance().registerSubSystem(
+            new ayt::script::ScriptSubSystem());
+    }
 }
 
 } // namespace ayt::app

@@ -31,9 +31,10 @@
 | 2a | `bootstrapEntityCore()` | 默认：Entity 核心，不拉渲染 |
 | 2b | `registerEntityPresentationStack()` | `enablePresentation=true`：`bootstrapModule` + `RendererSubSystem` |
 | 3 | `ScriptSubSystem` | Logia |
-| 4 | `AudioSubSystem`（可选） | `-no-audio` 则跳过 |
-| 5 | `bindBuiltinHostServices` | 写入 Host 服务表 |
-| 6 | Client Play Scene | `ApplicationImpl` 创建 `Scene(Play)`，可选 `-scene` / `GameDesc::scenePath` load，`setCurrent` → `World::instance()` 指向 Scene World |
+| 4 | `PhysicsSubSystem`（可选） | `enablePhysics` / `-no-physics`；`fixedUpdate` → `step`+`fetchResults` |
+| 5 | `AudioSubSystem`（可选） | `-no-audio` 则跳过 |
+| 6 | `bindBuiltinHostServices` | 写入 Host 服务表（`physics()` 也可惰性从 SubSystem 取） |
+| 7 | Client Play Scene | `ApplicationImpl` 创建 `Scene(Play)`，可选 `-scene` / `GameDesc::scenePath` load，`setCurrent` → `World::instance()` 指向 Scene World |
 
 **World 权威（P0）：** `SceneManager::setCurrent` 调用 `World::setActiveWorld(&scene.world())`。`EntitySubSystem::update` 走 `World::instance()`，因此 **不要** 再对同一 World 调 `scenes()->tick(dt)`（会双 tick）。`scenes()->tick` 仅给 Preview / 显式旁路用。
 
@@ -42,14 +43,21 @@
 | 顺序 | 步骤 |
 |------|------|
 | 1 | `registerEntityPresentationStack()`（与 Client `enablePresentation` 共用） |
-| 2 | Network + Script |
-| 3 | `bindBuiltinHostServices`（+ Editor 自有 Device 桥接仍在 App 内） |
-| 4 | Play：`beginPlay` 后再次 `bootstrapModule()`（系统落到 Play Scene World） |
+| 2 | `registerPhysicsModule()` |
+| 3 | Network + Script |
+| 4 | `bindBuiltinHostServices`（+ Editor 自有 Device 桥接仍在 App 内） |
+| 5 | Play：`beginPlay` 后再次 `bootstrapModule()`（系统落到 Play Scene World） |
 
-### 2.3 Server（未来）
+### 2.3 Server（`registerDefaultServerModules` / `-server`）
 
-`bootstrapEntityCore` + 可选 Script；**跳过** Device / Audio / Renderer。
+| 顺序 | 步骤 | 说明 |
+|------|------|------|
+| 1 | `bootstrapEntityCore()` | Entity 核心 |
+| 2 | `PhysicsSubSystem`（可选） | 默认开；`-no-physics` 关 |
+| 3 | `ScriptSubSystem`（可选） | `enableScript` |
+| 4 | `bindBuiltinHostServices` | 无 Device / Audio / Renderer |
 
+**跳过** Device / Audio / Renderer。`ApplicationImpl`：`GameDesc::serverMode` 或 CLI `-server`。
 ---
 
 ## 3. 服务面（游戏 / 脚本怎么用）
@@ -82,20 +90,22 @@ auto* inv = host->service<InventorySystem>("game.inventory");
 | API | 含义 |
 |-----|------|
 | `resources()` | 已 `provide` 的指针，否则回退 `ResourceManager::instance()` |
-| `physics()` | **仅**登记表；PhysicsManager 非进程单例，谁 `create` 谁 `provide`（见 `providePhysics`） |
+| `physics()` | 登记表，或惰性从 `PhysicsSubSystem::findRegistered()->manager()`（与 `audio()` 同形态） |
 | `audio()` | 登记表，或惰性从名为 `"Audio"` 的 SubSystem 取 `engine()` |
 | `scenes()` | PR-6 (v0.1.3)：已 `provide` 的指针，否则回退 `SceneManager::instance()`（**永不为 null**） |
 | `findSubSystem(name)` | 逃生口；新代码优先具名/键服务，不要靠字符串找业务 API |
 
 `ApplicationImpl::run` / `EditorApp::run` 内使用 `EngineHostScope`；装配后调用 `bindBuiltinHostServices`。
 
-创建 physics 时：
+Physics 默认经装配表注册；也可手动：
 
 ```cpp
-auto mgr = ayt::physics::PhysicsManager::create(desc);
-ayt::app::providePhysics(host, mgr.get());  // host->physics() 非空
+ayt::app::registerPhysicsModule(desc);           // GameLoop SubSystem
+// initialize 后：
+host->physics();                                 // lazy → PhysicsManager*
+// 或显式：
+ayt::app::providePhysics(host, mgr);
 ```
-
 ---
 
 ## 4. 以后添加新单例 / 新服务（必读）
@@ -132,7 +142,8 @@ ayt::app::providePhysics(host, mgr.get());  // host->physics() 非空
 | Key 常量 | 字符串 | 类型 | 谁 provide | 空指针含义 |
 |----------|--------|------|------------|------------|
 | `kHostServiceResources` | `ayt.resource.ResourceManager` | `ResourceManager*` | `bindBuiltinHostServices`；`resources()` 另有 instance 回退 | 几乎不应为空 |
-| `kHostServicePhysics` | `ayt.physics.PhysicsManager` | `PhysicsManager*` | 创建该 manager 的 App/玩法 | 未创建物理会话 |
+| `kHostServicePhysics` | `ayt.physics.PhysicsManager` | `PhysicsManager*` | `registerPhysicsModule` / `providePhysics`；`physics()` 另有 SubSystem 惰性回退 | 未装配物理或尚未 initialize |
+| `kHostServicePhysicsQuery` | `ayt.physics.IPhysicsQuery` | `IPhysicsQuery*` | `providePhysicsQuery` / SubSystem `query()` | 未装配物理或尚未 initialize |
 | `kHostServiceAudio` | `ayt.audio.AudioEngine` | `AudioEngine*` | bind 时若已 init；否则 `audio()` 惰性查 SubSystem | 无 Audio 模块或尚未 initialize |
 | `kHostServiceScenes` | `ayt.scene.SceneManager` | `SceneManager*` | `bindBuiltinHostServices`（PR-6 v0.1.3，Meyers singleton）；`scenes()` 另有 instance 回退 | 几乎不应为空（单例） |
 
@@ -167,15 +178,20 @@ if (auto* save = host.service<ayt::save::SaveService>(kHostServiceSave)) {
 
 ---
 
-## 6. 以后仍可做
+## 6. Host 扩展与事件对齐（已落地）
 
-- Plugin 扩展点（tick / 菜单 / loader）  
-- 多 Host 实例（测试）  
-- 与 Scene / Save / `simTick` 事件对齐  
-- 更窄的接口类型（`IPhysicsQuery` 等）替代具体 Manager（可渐进）
+| 能力 | API | 说明 |
+|------|-----|------|
+| **多 Host（测试注入）** | `EngineHostScope` + 自定义 `IEngineHost` | `currentEngineHost()` / `resolveEventBus()` 走当前 Host |
+| **窄物理查询** | `host->physicsQuery()` / `IPhysicsQuery` | raycast / overlap；勿为查询拉全 `PhysicsManager` |
+| **Plugin 扩展点** | `host->registerPlugin(IHostPluginHooks*)` | `onAttach` 里 `provide` + 订阅 `SimTickEvent` / Scene 事件 |
+| **Sim 时间锚点** | `SimTickEvent` + `IGameLoop::getSimTick()` | 每个 `fixedUpdate` 步发射一次 |
+| **Scene 生命周期** | `SceneBeginPlayEvent` / `SceneEndPlayEvent` / `SceneCurrentChangedEvent` | SceneManager observer → EventBus（AYScene 不依赖 EventSystem） |
+
+业务代码优先：`currentEngineHost()->eventBus().subscribe<SimTickEvent>(...)`，避免新的 `::instance()` 扩散。
 
 ---
 
 ## 7. 一句话
 
-**App 选壳 → 装配模块 → `provide` 进 Host → 游戏用 `host->physics()` / 键服务；新单例先登记键表，再考虑具名 API。**
+**App 选壳 → 装配模块 → `provide` 进 Host → 游戏用 `host->physics()` / `physicsQuery()` / 键服务 / EventBus；新单例先登记键表，再考虑具名 API。**

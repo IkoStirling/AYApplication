@@ -51,6 +51,10 @@ AppCommandLine AppCommandLine::parse(int argc, char* argv[])
             cmd.debug = true;
         } else if (arg == "-no-audio") {
             cmd.noAudio = true;
+        } else if (arg == "-no-physics") {
+            cmd.noPhysics = true;
+        } else if (arg == "-server") {
+            cmd.server = true;
         } else if (arg == "-width" && i + 1 < argc) {
             cmd.width = std::stoul(argv[++i]);
         } else if (arg == "-height" && i + 1 < argc) {
@@ -90,7 +94,9 @@ void AppCommandLine::printHelp(const char* appName) const
     std::printf("  -asset-root <path>     Set asset root directory\n");
     std::printf("  -user-data <path>      Set user data directory\n");
     std::printf("  -scene <path>          Load startup .ayscene (Client)\n");
+    std::printf("  -server                Headless Server assembly (no Device/Audio/Renderer)\n");
     std::printf("  -no-audio              Disable audio system\n");
+    std::printf("  -no-physics            Disable PhysicsSubSystem\n");
 }
 
 void AppCommandLine::printVersion(const char* appName, const char* version) const
@@ -130,6 +136,12 @@ public:
         if (!_cmdLine.scenePath.empty()) {
             _desc.scenePath = _cmdLine.scenePath.c_str();
         }
+        if (_cmdLine.server) {
+            _desc.serverMode = true;
+        }
+        if (_cmdLine.noPhysics) {
+            _desc.enablePhysics = false;
+        }
     }
 
     const GameDesc& getDesc() const override { return _desc; }
@@ -143,6 +155,18 @@ public:
 
     void registerSubSystems() override
     {
+        const bool enablePhysics = _desc.enablePhysics && !_cmdLine.noPhysics;
+
+        if (_desc.serverMode || _cmdLine.server) {
+            // Engine-host §2.3 Server assembly.
+            ServerModuleOptions opts;
+            opts.enableScript = true;
+            opts.enablePhysics = enablePhysics;
+            registerDefaultServerModules(opts);
+            bindBuiltinHostServices(engineHost());
+            return;
+        }
+
         // Engine-host Step 1: shared Client assembly table
         // (docs/engine-host.md §2.1).
         ClientModuleOptions opts;
@@ -151,6 +175,7 @@ public:
         opts.windowHeight = static_cast<int>(_desc.height);
         opts.enableAudio = !_cmdLine.noAudio;
         opts.enablePresentation = _desc.enablePresentation;
+        opts.enablePhysics = enablePhysics;
         registerDefaultClientModules(opts);
         bindBuiltinHostServices(engineHost());
 

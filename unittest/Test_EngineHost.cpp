@@ -73,6 +73,11 @@ public:
         return static_cast<ayt::physics::PhysicsManager*>(
             findService(kHostServicePhysics));
     }
+    ayt::physics::IPhysicsQuery* physicsQuery() override
+    {
+        return static_cast<ayt::physics::IPhysicsQuery*>(
+            findService(kHostServicePhysicsQuery));
+    }
     ayt::audio::AudioEngine* audio() override { return nullptr; }
     // PR-6 (v0.1.3): scenes() 不 fallback（与 FakeHost 现有 physics()/audio() 同形态——
     // FakeHost 是「纯登记表」，fallback 由 DefaultEngineHost 验证）。

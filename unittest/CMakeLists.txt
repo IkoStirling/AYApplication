@@ -7,6 +7,8 @@ set(SOURCES
     ApplicationTest.cpp
     Test_EventBusHostScope.cpp
     Test_AudioSubsystemRegistration.cpp
+    Test_ServerAndPhysicsModules.cpp
+    Test_HostExtensionsAndEvents.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
@@ -24,6 +26,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     # AYAudio PRIVATE here is fine because the test executable is a leaf
     # target (no consumers downstream).
     AYAudio
+    # Server/Physics assembly tests need PhysicsSubSystem symbols.
+    AYPhysics
+    # Host extension / Scene lifecycle event tests.
+    AYScene
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE

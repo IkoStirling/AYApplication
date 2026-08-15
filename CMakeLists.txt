@@ -11,14 +11,17 @@ set(SOURCES
     src/AYEngineHost.cpp
     src/AYEngineHostScope.cpp
     src/AYRegisterDefaultModules.cpp
+    src/AYSceneLifecycleEventBridge.cpp
 )
 
 set(HEADERS
     interface/IAYApplication.h
     interface/AYAppEventHost.h
     interface/IEngineHost.h
+    interface/IHostPluginHooks.h
     interface/AYRegisterDefaultModules.h
     include/AYApplication.h
+    include/AYSceneLifecycleEventBridge.h
 )
 
 add_library(${PROJECT_NAME} STATIC ${SOURCES} ${HEADERS})
@@ -50,6 +53,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     PRIVATE AYScene
     # P0 Client presentation option: RendererSubSystem registration.
     PRIVATE AYRenderer
+    # Server/Client physics assembly (PhysicsSubSystem : ISubSystem).
+    PRIVATE AYPhysics
     # Entity comes via AYScript (bootstrapEntityCore). EventBus via GameLoop.
     # AYResource: DefaultEngineHost::resources() / bindBuiltinHostServices.
     # AYScene: DefaultEngineHost::scenes() / bindBuiltinHostServices (PR-6 v0.1.3).

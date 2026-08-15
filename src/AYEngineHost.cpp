@@ -2,15 +2,20 @@
 
 #include <AYAudioSubSystem.h>
 #include <AYGameLoop.h>
+#include <AYPhysicsSubSystem.h>
 #include <AYResourceManager.h>
+#include <AYSceneLifecycleEventBridge.h>
 #include <AYSceneManager.h>  // PR-6 (v0.1.3): scenes() facade
 #include <AYSubSystemRegistry.h>
 #include <DeprecatedSuppress.h>  // v0.3 PR-4 (AYScene): instance() [[deprecated]] 豁免
+#include <IPhysicsQuery.h>
 #include <ayevent/EventBus.h>
 
+#include <algorithm>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace ayt::app
 {
@@ -77,8 +82,26 @@ public:
 
     ayt::physics::PhysicsManager* physics() override
     {
-        return static_cast<ayt::physics::PhysicsManager*>(
-            findService(kHostServicePhysics));
+        if (auto* p = static_cast<ayt::physics::PhysicsManager*>(
+                findService(kHostServicePhysics))) {
+            return p;
+        }
+        if (auto* physSub = ayt::physics::PhysicsSubSystem::findRegistered()) {
+            return physSub->manager();
+        }
+        return nullptr;
+    }
+
+    ayt::physics::IPhysicsQuery* physicsQuery() override
+    {
+        if (auto* p = static_cast<ayt::physics::IPhysicsQuery*>(
+                findService(kHostServicePhysicsQuery))) {
+            return p;
+        }
+        if (auto* physSub = ayt::physics::PhysicsSubSystem::findRegistered()) {
+            return physSub->query();
+        }
+        return nullptr;
     }
 
     ayt::audio::AudioEngine* audio() override
@@ -94,14 +117,6 @@ public:
         return nullptr;
     }
 
-    // PR-6 (v0.1.3): scenes() facade — key+fallback 双路径（mirror resources()）。
-    // findService(kHostServiceScenes) 若找到返之；否则 fallback 到 singleton。
-    // clearProvidedServices() 后 service<T>(key) 返 nullptr，但 scenes() 仍 OK
-    // （与 resources() 行为对齐）。
-    //
-    // v0.3 PR-4 (AYScene): fallback `instance()` 触发 [[deprecated]] warning —
-    // 豁免（AYSceneManager.h 注释）；facade 自身就靠 instance 取 singleton
-    // （circular：facade 是 host->scenes() 的实现，不能再调 facade）。
     AY_DEPRECATED_SUPPRESS_BEGIN
     ayt::scene::SceneManager* scenes() override
     {
@@ -113,9 +128,50 @@ public:
     }
     AY_DEPRECATED_SUPPRESS_END
 
+    void registerPlugin(IHostPluginHooks* plugin) override
+    {
+        if (plugin == nullptr) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(_pluginMutex);
+        if (std::find(_plugins.begin(), _plugins.end(), plugin) != _plugins.end()) {
+            return;
+        }
+        _plugins.push_back(plugin);
+        plugin->onAttach(*this);
+    }
+
+    void unregisterPlugin(IHostPluginHooks* plugin) override
+    {
+        if (plugin == nullptr) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(_pluginMutex);
+        const auto it = std::find(_plugins.begin(), _plugins.end(), plugin);
+        if (it == _plugins.end()) {
+            return;
+        }
+        plugin->onDetach(*this);
+        _plugins.erase(it);
+    }
+
+    ~DefaultEngineHost() override
+    {
+        // Detach remaining plugins without touching EventBus (safe teardown).
+        std::lock_guard<std::mutex> lock(_pluginMutex);
+        for (auto* p : _plugins) {
+            if (p) {
+                p->onDetach(*this);
+            }
+        }
+        _plugins.clear();
+    }
+
 private:
     mutable std::mutex _mutex;
     std::unordered_map<std::string, void*> _services;
+    mutable std::mutex _pluginMutex;
+    std::vector<IHostPluginHooks*> _plugins;
 };
 
 DefaultEngineHost g_defaultHost;
@@ -127,6 +183,14 @@ IEngineHost& defaultEngineHost()
     return g_defaultHost;
 }
 
+ayt::event::EventBus& resolveEventBus()
+{
+    if (auto* host = currentEngineHost()) {
+        return host->eventBus();
+    }
+    return ayt::event::EventBus::instance();
+}
+
 void bindBuiltinHostServices(IEngineHost& host)
 {
     host.provide(kHostServiceResources, &ayt::resource::ResourceManager::instance());
@@ -136,21 +200,33 @@ void bindBuiltinHostServices(IEngineHost& host)
             host.provide(kHostServiceAudio, eng);
         }
     }
-    // PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家注册。
-    // v0.3 PR-4: instance() [[deprecated]] 豁免（bindBuiltinHostServices 是
-    // facade 提供者，自身就靠 instance 取 singleton — circular）。
     AY_DEPRECATED_SUPPRESS_BEGIN
     host.provide(kHostServiceScenes, &ayt::scene::SceneManager::instance());
     AY_DEPRECATED_SUPPRESS_END
 
-    // PhysicsManager is not a process singleton — call providePhysics() when created:
-    //   auto mgr = PhysicsManager::create(desc);
-    //   providePhysics(host, mgr.get());
+    // Scene lifecycle → EventBus (Host bridge; AYScene stays EventSystem-free).
+    if (auto* sm = host.scenes()) {
+        sm->setLifecycleObserver(&SceneLifecycleEventBridge::instance());
+    }
+
+    if (auto* physSub = ayt::physics::PhysicsSubSystem::findRegistered()) {
+        if (auto* mgr = physSub->manager()) {
+            providePhysics(host, mgr);
+        }
+        if (auto* query = physSub->query()) {
+            providePhysicsQuery(host, query);
+        }
+    }
 }
 
 void providePhysics(IEngineHost& host, ayt::physics::PhysicsManager* manager)
 {
     host.provide(kHostServicePhysics, manager);
+}
+
+void providePhysicsQuery(IEngineHost& host, ayt::physics::IPhysicsQuery* query)
+{
+    host.provide(kHostServicePhysicsQuery, query);
 }
 
 } // namespace ayt::app

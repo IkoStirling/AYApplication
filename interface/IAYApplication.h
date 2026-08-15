@@ -39,6 +39,10 @@ struct GameDesc {
     const char* scenePath = "";
     /// When true, Client registers full ECS render systems + RendererSubSystem.
     bool enablePresentation = false;
+    /// When true, register PhysicsSubSystem (Client/Server assembly).
+    bool enablePhysics = true;
+    /// When true, ApplicationImpl uses registerDefaultServerModules (headless).
+    bool serverMode = false;
 };
 
 // =============================================================================
@@ -52,6 +56,10 @@ struct AppCommandLine {
     bool version = false;
     bool debug = false;
     bool noAudio = false;
+    /// `-no-physics` — skip PhysicsSubSystem registration.
+    bool noPhysics = false;
+    /// `-server` — headless Server assembly (no Device/Audio/Renderer).
+    bool server = false;
     uint32_t width = 0;
     uint32_t height = 0;
     float fps = 0.0f;

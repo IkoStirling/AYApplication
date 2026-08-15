@@ -5,6 +5,7 @@
 // New singletons: register a stable key — see docs/engine-host.md §3–§4.
 
 #include <IAYGameLoop.h>
+#include <IHostPluginHooks.h>
 
 #include <string_view>
 
@@ -21,6 +22,7 @@ class ResourceManager;
 namespace ayt::physics
 {
 class PhysicsManager;
+class IPhysicsQuery;
 }
 
 namespace ayt::audio
@@ -39,11 +41,12 @@ namespace ayt::app
 // ---------------------------------------------------------------------------
 // Stable service keys (add new keys here + docs/engine-host.md table together)
 // ---------------------------------------------------------------------------
-inline constexpr const char* kHostServiceResources = "ayt.resource.ResourceManager";
-inline constexpr const char* kHostServicePhysics   = "ayt.physics.PhysicsManager";
-inline constexpr const char* kHostServiceAudio     = "ayt.audio.AudioEngine";
+inline constexpr const char* kHostServiceResources    = "ayt.resource.ResourceManager";
+inline constexpr const char* kHostServicePhysics      = "ayt.physics.PhysicsManager";
+inline constexpr const char* kHostServicePhysicsQuery = "ayt.physics.IPhysicsQuery";
+inline constexpr const char* kHostServiceAudio        = "ayt.audio.AudioEngine";
 // PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家。
-inline constexpr const char* kHostServiceScenes    = "ayt.scene.SceneManager";
+inline constexpr const char* kHostServiceScenes       = "ayt.scene.SceneManager";
 
 /// Process-scoped engine host: assembly + service discovery (not a gameplay module).
 class IEngineHost {
@@ -79,8 +82,10 @@ public:
     // --- Built-in typed accessors (nullptr if not provided / not ready) ---
     /// L2 resource manager. Default host falls back to ResourceManager::instance().
     virtual ayt::resource::ResourceManager* resources() = 0;
-    /// Physics manager when the app/game has provide()'d one (not a process singleton today).
+    /// Physics manager when provided / PhysicsSubSystem initialized.
     virtual ayt::physics::PhysicsManager* physics() = 0;
+    /// Narrow query facade (raycast / overlap). Prefer over physics() when possible.
+    virtual ayt::physics::IPhysicsQuery* physicsQuery() = 0;
     /// Audio engine when AudioSubSystem is registered and initialized; else provided pointer.
     virtual ayt::audio::AudioEngine* audio() = 0;
     /// 关卡生命周期管家（design §10 Q-F 收口；v0.1.3）。
@@ -90,6 +95,10 @@ public:
     /// 提供 process-wide 的 current / setEdit / beginPlay / endPlay / tick / 诊断字段
     ///（详见 `AYSceneManager.h`）。
     virtual ayt::scene::SceneManager* scenes() = 0;
+
+    // --- Plugin extension points (default no-op; DefaultEngineHost stores hooks) ---
+    virtual void registerPlugin(IHostPluginHooks* plugin) { (void)plugin; }
+    virtual void unregisterPlugin(IHostPluginHooks* plugin) { (void)plugin; }
 };
 
 /// Default process-wide host.
@@ -100,6 +109,9 @@ IEngineHost* currentEngineHost();
 
 void setCurrentEngineHost(IEngineHost* host);
 
+/// Prefer current Host's eventBus; fall back to EventBus::instance().
+ayt::event::EventBus& resolveEventBus();
+
 /// Wire well-known builtins into `host` (resources singleton; audio/physics if available).
 /// Call after default module registration (and again after GameLoop init if audio was null).
 void bindBuiltinHostServices(IEngineHost& host);
@@ -107,6 +119,9 @@ void bindBuiltinHostServices(IEngineHost& host);
 /// P1: register a PhysicsManager into the host service table (`kHostServicePhysics`).
 /// Physics is not a process singleton — call after `PhysicsManager::create`.
 void providePhysics(IEngineHost& host, ayt::physics::PhysicsManager* manager);
+
+/// Register narrow IPhysicsQuery (`kHostServicePhysicsQuery`).
+void providePhysicsQuery(IEngineHost& host, ayt::physics::IPhysicsQuery* query);
 
 /// RAII: sets currentEngineHost for the duration of Application::run.
 class EngineHostScope {
