@@ -63,8 +63,7 @@ endif()
 
 # Register with ctest so `ctest` picks up the binary automatically.
 enable_testing()
-ay_configure_test_tmpdir(${PROJECT_NAME})
-add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})
+ay_add_test(${PROJECT_NAME})
 
 # -----------------------------------------------------------------------------
 # EventBusScopeTest - standalone EventBusHostScope tests
@@ -98,8 +97,7 @@ target_compile_options(EventBusScopeTest PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
 
-ay_configure_test_tmpdir(EventBusScopeTest)
-add_test(NAME EventBusScopeTest COMMAND EventBusScopeTest)
+ay_add_test(EventBusScopeTest)
 
 # -----------------------------------------------------------------------------
 # EngineHostTest - service registry contract (FakeHost; no DefaultEngineHost /
@@ -131,5 +129,4 @@ target_compile_options(EngineHostTest PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
 
-ay_configure_test_tmpdir(EngineHostTest)
-add_test(NAME EngineHostTest COMMAND EngineHostTest)
+ay_add_test(EngineHostTest)
