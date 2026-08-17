@@ -104,8 +104,10 @@ TEST_SUITE(AudioSubsystemRegistration)
         CHECK(probe.sub() != nullptr);
         CHECK(probe.sub()->engine() != nullptr);
         CHECK(probe.sub()->engine()->isInitialized());
-        // Backend was not installed, so the engine reports no real device.
-        CHECK(probe.sub()->engine()->backend() == nullptr);
+        // AudioEngine materializes the configured Null backend when no explicit
+        // backend is installed. It is a valid backend, but never a real device.
+        CHECK(probe.sub()->engine()->backend() != nullptr);
+        CHECK(!probe.sub()->engine()->backend()->isRealDevice());
         CHECK(!probe.realDeviceAvailable());
 
         probe.teardown();
