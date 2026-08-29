@@ -1,6 +1,7 @@
 #include <AYOnlineApplication/OnlineApplication.h>
 
 #include <AYEventSystem/EventBus.h>
+#include <AYEventSystem/Events/SceneEvents.h>
 #include <AYGameLoop/SubSystemRegistry.h>
 
 #include <algorithm>
@@ -97,6 +98,9 @@ struct OnlineSceneBridge::Impl {
             [this](const auto& event) { onFlowStatusChanged(event); });
         sceneConnection = eventBus.subscribe<::ayt::app::RuntimeSceneLoadFinishedEvent>(
             [this](const auto& event) { onSceneLoadFinished(event); });
+        sceneCurrentConnection =
+            eventBus.subscribe<::ayt::event::SceneCurrentChangedEvent>(
+                [this](const auto& event) { onSceneCurrentChanged(event); });
         status.ready = true;
         return true;
     }
@@ -122,12 +126,17 @@ struct OnlineSceneBridge::Impl {
     }
 
     void shutdown() {
+        deactivateActiveSessionScene();
         if (loadConnection != 0) eventBus.unsubscribe(loadConnection);
         if (statusConnection != 0) eventBus.unsubscribe(statusConnection);
         if (sceneConnection != 0) eventBus.unsubscribe(sceneConnection);
+        if (sceneCurrentConnection != 0) {
+            eventBus.unsubscribe(sceneCurrentConnection);
+        }
         loadConnection = 0;
         statusConnection = 0;
         sceneConnection = 0;
+        sceneCurrentConnection = 0;
         if (pendingPurpose != PendingPurpose::None) {
             (void)loader.cancelLoad(status.sceneRequestId);
         }
@@ -158,6 +167,94 @@ struct OnlineSceneBridge::Impl {
     void failFlowLoad(uint64_t generation, std::string message) {
         status.lastError = message;
         (void)flow.failLoading(generation, std::move(message));
+    }
+
+    bool isCurrentFlowEvent(
+        const ::ayt::net::OnlineFlowStatusChangedEvent& event) const {
+        const auto current = flow.getStatus();
+        return event.state == current.state &&
+               event.sessionState == current.sessionState &&
+               event.loadingGeneration == current.loadingGeneration &&
+               event.sessionId == current.sessionId &&
+               event.sessionEpoch == current.sessionEpoch &&
+               event.worldLoaded == current.worldLoaded;
+    }
+
+    void suspendActiveSessionScene(bool recovery) {
+        if (!status.sessionSceneActive || status.sessionSceneSuspended ||
+            status.sessionSceneDeactivated) return;
+        if (recovery) ++status.recoveryGeneration;
+        if (config.suspendSessionScene && activeScene) {
+            config.suspendSessionScene(*activeScene);
+        }
+        status.sessionSceneSuspended = true;
+    }
+
+    void deactivateActiveSessionScene() {
+        if (!status.sessionSceneActive || status.sessionSceneDeactivated) {
+            return;
+        }
+        suspendActiveSessionScene(false);
+        if (config.deactivateSessionScene && activeScene) {
+            config.deactivateSessionScene(*activeScene);
+        }
+        status.sessionSceneDeactivated = true;
+    }
+
+    void failActiveWorld(std::string message) {
+        status.lastError = message;
+        const auto current = flow.getStatus();
+        if (current.state == ::ayt::net::OnlineFlowState::LoadingSession &&
+            activeFlowGeneration != 0) {
+            (void)flow.failLoading(activeFlowGeneration, std::move(message));
+        } else if (current.state == ::ayt::net::OnlineFlowState::InSession) {
+            (void)flow.failActiveSession(std::move(message));
+        }
+    }
+
+    bool validateRecoveredSession(
+        const ::ayt::net::OnlineFlowStatusChangedEvent& event) {
+        if (status.activeSessionId != 0 && event.sessionId != 0 &&
+            status.activeSessionId != event.sessionId) {
+            failActiveWorld("Recovered transport belongs to another session");
+            return false;
+        }
+        if (status.activeSessionEpoch != 0 && event.sessionEpoch != 0 &&
+            event.sessionEpoch < status.activeSessionEpoch) {
+            failActiveWorld("Recovered transport has a stale authority epoch");
+            return false;
+        }
+        return true;
+    }
+
+    bool resumeActiveSessionScene(
+        const ::ayt::net::OnlineFlowStatusChangedEvent& event) {
+        if (!validateRecoveredSession(event)) return false;
+        if (status.sessionSceneDeactivated) return false;
+
+        const bool epochAdvanced = status.activeSessionEpoch != 0 &&
+            event.sessionEpoch > status.activeSessionEpoch;
+        if (epochAdvanced && !status.sessionSceneSuspended) {
+            suspendActiveSessionScene(true);
+        }
+        if (status.sessionSceneSuspended) {
+            std::string message;
+            if (config.resumeSessionScene && activeScene &&
+                !config.resumeSessionScene(
+                    *activeScene, status.recoveryGeneration,
+                    event.sessionEpoch, message)) {
+                failActiveWorld(message.empty()
+                    ? "Session scene recovery callback failed"
+                    : std::move(message));
+                return false;
+            }
+            status.sessionSceneSuspended = false;
+        }
+        if (event.sessionId != 0) status.activeSessionId = event.sessionId;
+        if (event.sessionEpoch != 0) {
+            status.activeSessionEpoch = event.sessionEpoch;
+        }
+        return true;
     }
 
     void onLoadRequested(
@@ -230,6 +327,7 @@ struct OnlineSceneBridge::Impl {
         if (pendingPurpose != PendingPurpose::None) return false;
         uint64_t requestId = 0;
         if (!allocateRequestId(requestId)) return false;
+        deactivateActiveSessionScene();
         ::ayt::app::RuntimeSceneLoadRequest request;
         request.requestId = requestId;
         request.scenePath = config.mainMenuScenePath;
@@ -249,6 +347,10 @@ struct OnlineSceneBridge::Impl {
 
     void onFlowStatusChanged(
         const ::ayt::net::OnlineFlowStatusChangedEvent& event) {
+        // Event delivery can lag behind multiple coordinator updates. Only
+        // the current snapshot may drive destructive scene lifecycle work.
+        if (!isCurrentFlowEvent(event)) return;
+
         // Any transition away from the exact loading generation makes the
         // staged request stale.  In particular, LoadingTimedOut enters Failed
         // without passing through Leaving; allowing the queued request to run
@@ -259,7 +361,42 @@ struct OnlineSceneBridge::Impl {
             (void)loader.cancelLoad(status.sceneRequestId);
             clearPending();
         }
+
+        if (status.sessionSceneActive) {
+            if (event.state == ::ayt::net::OnlineFlowState::InSession &&
+                event.sessionState ==
+                    ::ayt::net::OnlineSessionCoordinatorState::Connecting) {
+                suspendActiveSessionScene(true);
+            } else if (event.state == ::ayt::net::OnlineFlowState::InSession &&
+                       event.sessionState ==
+                         ::ayt::net::OnlineSessionCoordinatorState::InSession) {
+                if (!resumeActiveSessionScene(event)) return;
+            } else if (event.state == ::ayt::net::OnlineFlowState::Leaving ||
+                       event.state ==
+                         ::ayt::net::OnlineFlowState::SigningOut) {
+                suspendActiveSessionScene(false);
+            }
+        }
         if (isMenuState(event.state) && status.sessionSceneActive &&
+            pendingPurpose == PendingPurpose::None) {
+            (void)requestMainMenu();
+        }
+    }
+
+    void onSceneCurrentChanged(
+        const ::ayt::event::SceneCurrentChangedEvent& event) {
+        if (!status.sessionSceneActive || event.current == activeScene) return;
+
+        // RuntimeSceneLoader publishes current-changed before its finished
+        // event. A matching pending request is an expected atomic replacement.
+        if (pendingPurpose != PendingPurpose::None &&
+            event.current == loader.currentScene()) return;
+
+        suspendActiveSessionScene(false);
+        deactivateActiveSessionScene();
+        failActiveWorld("Active session scene was replaced outside the "
+                        "online scene loader");
+        if (isMenuState(flow.getStatus().state) &&
             pendingPurpose == PendingPurpose::None) {
             (void)requestMainMenu();
         }
@@ -290,18 +427,41 @@ struct OnlineSceneBridge::Impl {
         status.activeScenePath = loaderStatus.scenePath;
         status.lastError.clear();
         if (purpose == PendingPurpose::Session) {
+            activeScene = loader.currentScene();
+            if (!activeScene) {
+                failFlowLoad(flowGeneration,
+                             "Runtime scene loader activated no Scene");
+                return;
+            }
             status.sessionSceneActive = true;
+            status.sessionSceneSuspended = false;
+            status.sessionSceneDeactivated = false;
             status.mainMenuRecoveryRequired = false;
             status.activeContent = content;
+            status.recoveryGeneration = 0;
+            activeFlowGeneration = flowGeneration;
             const auto currentFlow = flow.getStatus();
+            status.activeSessionId = currentFlow.sessionId;
+            status.activeSessionEpoch = currentFlow.sessionEpoch;
+            if (currentFlow.sessionState !=
+                ::ayt::net::OnlineSessionCoordinatorState::InSession) {
+                suspendActiveSessionScene(false);
+            }
             if (currentFlow.state == ::ayt::net::OnlineFlowState::LoadingSession &&
                 currentFlow.loadingGeneration == flowGeneration) {
                 (void)flow.completeLoading(flowGeneration);
             }
         } else {
             status.sessionSceneActive = false;
+            status.sessionSceneSuspended = false;
+            status.sessionSceneDeactivated = false;
             status.mainMenuRecoveryRequired = false;
             status.activeContent = {};
+            status.recoveryGeneration = 0;
+            status.activeSessionId = 0;
+            status.activeSessionEpoch = 0;
+            activeFlowGeneration = 0;
+            activeScene = nullptr;
         }
     }
 
@@ -312,9 +472,12 @@ struct OnlineSceneBridge::Impl {
     ::ayt::event::ConnectionId loadConnection = 0;
     ::ayt::event::ConnectionId statusConnection = 0;
     ::ayt::event::ConnectionId sceneConnection = 0;
+    ::ayt::event::ConnectionId sceneCurrentConnection = 0;
     uint64_t nextSceneRequestId = 0;
+    uint64_t activeFlowGeneration = 0;
     PendingPurpose pendingPurpose = PendingPurpose::None;
     ::ayt::net::OnlineContentDescriptor pendingContent;
+    ::ayt::scene::Scene* activeScene = nullptr;
     OnlineSceneBridgeStatus status;
 };
 

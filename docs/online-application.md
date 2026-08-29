@@ -21,6 +21,27 @@ Game targets that opt in link `AYOnlineApplication`; targets that only link
   `mainMenuRecoveryRequired`; UI may call `retryMainMenuScene()` after repairing
   local content or storage.
 
+## Session-scene recovery lifecycle
+
+Projects bind scene-owned replication, input, and gameplay services through
+three optional `OnlineSceneBridgeConfig` callbacks:
+
+- `suspendSessionScene` stops scene-owned work when the transport begins a
+  reconnect/migration or session teardown;
+- `resumeSessionScene` rebuilds those bindings after transport recovery and
+  receives the monotonic recovery generation plus the current authority epoch;
+- `deactivateSessionScene` releases all remaining scene pointers before the
+  loader replaces or destroys the old Scene.
+
+The bridge ignores stale queued status events. A changed authority epoch is
+treated as a recovery edge even if the transport reports `InSession` without
+an observable intermediate state. If resume fails, if the recovered transport
+belongs to another session, or if another system replaces the active Scene,
+the flow reports `WorldFailed`, tears down the network session, and restores
+the trusted local MainMenu. AYNetwork itself remains responsible for resetting
+replication authority state; the application callbacks only rebuild
+scene-owned registrations.
+
 ## Content identity
 
 Lobby and matchmaking contracts carry `OnlineContentDescriptor`:
@@ -69,6 +90,26 @@ void GameApplication::onInit()
             (void)scene;
             (void)error;
             return true;
+        };
+    config.scenes.suspendSessionScene =
+        [](ayt::scene::Scene& scene) {
+            // Pause scene-owned network input and replication bindings.
+            (void)scene;
+        };
+    config.scenes.resumeSessionScene =
+        [](ayt::scene::Scene& scene, uint64_t recoveryGeneration,
+           uint32_t authorityEpoch, std::string& error) {
+            // Rebind scene-owned consumers to the recovered session.
+            (void)scene;
+            (void)recoveryGeneration;
+            (void)authorityEpoch;
+            (void)error;
+            return true;
+        };
+    config.scenes.deactivateSessionScene =
+        [](ayt::scene::Scene& scene) {
+            // Drop all registrations that retain Scene/World addresses.
+            (void)scene;
         };
 
     if (!registerOnlineApplication(engineHost(), std::move(config))) {

@@ -1,6 +1,7 @@
 #include <AYOnlineApplication/OnlineApplication.h>
 
 #include <AYEventSystem/EventBus.h>
+#include <AYEventSystem/Events/SceneEvents.h>
 #include <AYScene.h>
 #include <AYScene/SceneManager.h>
 #include <AYTest.h>
@@ -45,13 +46,17 @@ public:
     bool launchLobbyP2P(uint16_t) override { return true; }
     bool startMatchmaking(ayt::net::MatchmakingRequest) override { return true; }
     bool cancelMatchmaking() override { settleIdle(); return true; }
-    bool leaveSession() override { settleIdle(); return true; }
+    bool leaveSession() override {
+        ++leaveSessionCalls;
+        settleIdle();
+        return true;
+    }
     bool reset() override { settleIdle(); return true; }
     ayt::net::OnlineSessionCoordinatorStatus getOnlineStatus() const override {
         return onlineStatus;
     }
     ayt::net::P2PSessionCoordinatorStatus getP2PStatus() const override {
-        return {};
+        return p2pStatus;
     }
     std::vector<ayt::net::LobbyInfo> getLobbyResults() const override {
         return {};
@@ -62,10 +67,31 @@ public:
         onlineStatus.state = ayt::net::OnlineSessionCoordinatorState::Idle;
         onlineStatus.topology = ayt::net::OnlineSessionTopology::None;
         onlineStatus.assignment = {};
+        p2pStatus = {};
+    }
+
+    void setP2PSession(bool connected, uint64_t sessionId,
+                       uint32_t epoch) {
+        onlineStatus.state = connected
+            ? ayt::net::OnlineSessionCoordinatorState::InSession
+            : ayt::net::OnlineSessionCoordinatorState::Connecting;
+        onlineStatus.topology = ayt::net::OnlineSessionTopology::P2P;
+        onlineStatus.assignment.topology = ayt::net::MatchTopology::P2P;
+        onlineStatus.assignment.content = {
+            "maps/arena", "content-1", 42};
+        p2pStatus.backendSession.sessionId = sessionId;
+        p2pStatus.backendSession.epoch = epoch;
+        p2pStatus.networkSession.sessionId = sessionId;
+        p2pStatus.networkSession.epoch = epoch;
+        p2pStatus.state = connected
+            ? ayt::net::P2PSessionCoordinatorState::Active
+            : ayt::net::P2PSessionCoordinatorState::Connecting;
     }
 
     bool authenticated = false;
     ayt::net::OnlineSessionCoordinatorStatus onlineStatus;
+    ayt::net::P2PSessionCoordinatorStatus p2pStatus;
+    uint32_t leaveSessionCalls = 0;
 };
 
 std::filesystem::path writeEmptyScene(const char* fileName) {
@@ -74,6 +100,70 @@ std::filesystem::path writeEmptyScene(const char* fileName) {
     output << "{}";
     return path;
 }
+
+class ActiveBridgeHarness {
+public:
+    explicit ActiveBridgeHarness(std::string suffix)
+        : flow(fakeOnline, {}, &bus), _suffix(std::move(suffix)) {}
+
+    void initialize(
+        const std::function<void(online::OnlineSceneBridgeConfig&)>& configure = {}) {
+        sessionPath = writeEmptyScene(
+            ("ay_online_application_" + _suffix + "_session.ayscene").c_str());
+        menuPath = writeEmptyScene(
+            ("ay_online_application_" + _suffix + "_menu.ayscene").c_str());
+        scenes = ayt::app::defaultEngineHost().scenes();
+        scenes->setCurrent(nullptr);
+        loader = ayt::app::createRuntimeSceneLoader(*scenes, {}, &bus);
+        CHECK(loader->initialize());
+
+        catalog = std::make_shared<online::OnlineContentCatalog>();
+        CHECK(catalog->addOrReplace({
+            "maps/arena", "content-1", sessionPath.string(), "Arena"}));
+        online::OnlineSceneBridgeConfig config;
+        config.contentResolver = catalog;
+        config.mainMenuScenePath = menuPath.string();
+        config.mainMenuSceneName = "MainMenu";
+        if (configure) configure(config);
+        bridge = std::make_unique<online::OnlineSceneBridge>(
+            flow, *loader, std::move(config), bus);
+        CHECK(bridge->initialize());
+    }
+
+    void activate(uint64_t sessionId = 700, uint32_t epoch = 3) {
+        CHECK(flow.signIn("player-token"));
+        bus.pump();
+        fakeOnline.setP2PSession(false, sessionId, epoch);
+        flow.update();
+        bus.pump();
+        CHECK(bridge->getStatus().loadPending);
+        loader->update(0.0f);
+        fakeOnline.setP2PSession(true, sessionId, epoch);
+        bus.pump();
+        CHECK(flow.getStatus().state == ayt::net::OnlineFlowState::InSession);
+        CHECK(bridge->getStatus().sessionSceneActive);
+    }
+
+    ~ActiveBridgeHarness() {
+        if (bridge) bridge->shutdown();
+        if (loader) loader->shutdown();
+        if (!sessionPath.empty()) std::filesystem::remove(sessionPath);
+        if (!menuPath.empty()) std::filesystem::remove(menuPath);
+    }
+
+    ayt::event::EventBus bus;
+    FakeOnlineSubSystem fakeOnline;
+    ayt::net::OnlineFlowCoordinator flow;
+    ayt::scene::SceneManager* scenes = nullptr;
+    std::unique_ptr<ayt::app::IRuntimeSceneLoader> loader;
+    std::filesystem::path sessionPath;
+    std::filesystem::path menuPath;
+    std::shared_ptr<online::OnlineContentCatalog> catalog;
+    std::unique_ptr<online::OnlineSceneBridge> bridge;
+
+private:
+    std::string _suffix;
+};
 
 } // namespace
 
@@ -288,6 +378,132 @@ TEST_CASE(loading_timeout_cancels_stale_scene_request)
     loader->shutdown();
     std::filesystem::remove(sessionPath);
     std::filesystem::remove(menuPath);
+}
+
+TEST_CASE(reconnect_suspends_and_resumes_scene_once)
+{
+    uint32_t suspendCalls = 0;
+    uint32_t resumeCalls = 0;
+    uint64_t resumedGeneration = 0;
+    uint32_t resumedEpoch = 0;
+    ActiveBridgeHarness harness("reconnect");
+    harness.initialize([&](auto& config) {
+        config.suspendSessionScene = [&](ayt::scene::Scene&) {
+            ++suspendCalls;
+        };
+        config.resumeSessionScene =
+            [&](ayt::scene::Scene&, uint64_t generation, uint32_t epoch,
+                std::string&) {
+                ++resumeCalls;
+                resumedGeneration = generation;
+                resumedEpoch = epoch;
+                return true;
+            };
+    });
+    harness.activate();
+
+    harness.fakeOnline.setP2PSession(false, 700, 3);
+    harness.flow.update();
+    harness.bus.pump();
+    CHECK(harness.bridge->getStatus().sessionSceneSuspended);
+    CHECK_INT_EQ(suspendCalls, 1);
+    CHECK(harness.bridge->getStatus().recoveryGeneration == 1);
+
+    harness.fakeOnline.setP2PSession(true, 700, 4);
+    harness.flow.update();
+    harness.bus.pump();
+    CHECK_FALSE(harness.bridge->getStatus().sessionSceneSuspended);
+    CHECK_INT_EQ(resumeCalls, 1);
+    CHECK(resumedGeneration == 1);
+    CHECK(resumedEpoch == 4);
+    CHECK(harness.bridge->getStatus().activeSessionEpoch == 4);
+
+    // A delayed event from the prior transport snapshot must not suspend the
+    // already recovered world a second time.
+    const auto current = harness.flow.getStatus();
+    ayt::net::OnlineFlowStatusChangedEvent stale;
+    stale.state = current.state;
+    stale.sessionState = ayt::net::OnlineSessionCoordinatorState::Connecting;
+    stale.loadingGeneration = current.loadingGeneration;
+    stale.sessionId = current.sessionId;
+    stale.sessionEpoch = current.sessionEpoch;
+    stale.worldLoaded = current.worldLoaded;
+    harness.bus.post(stale);
+    harness.bus.pump();
+    CHECK_INT_EQ(suspendCalls, 1);
+    CHECK_INT_EQ(resumeCalls, 1);
+    CHECK(harness.bridge->getStatus().recoveryGeneration == 1);
+}
+
+TEST_CASE(reconnect_callback_failure_returns_to_main_menu)
+{
+    uint32_t deactivateCalls = 0;
+    ActiveBridgeHarness harness("reconnect_failure");
+    harness.initialize([&](auto& config) {
+        config.resumeSessionScene =
+            [](ayt::scene::Scene&, uint64_t, uint32_t, std::string& message) {
+                message = "replication bindings could not be restored";
+                return false;
+            };
+        config.deactivateSessionScene = [&](ayt::scene::Scene&) {
+            ++deactivateCalls;
+        };
+    });
+    harness.activate();
+
+    harness.fakeOnline.setP2PSession(false, 700, 3);
+    harness.flow.update();
+    harness.bus.pump();
+    harness.fakeOnline.setP2PSession(true, 700, 4);
+    harness.flow.update();
+    harness.bus.pump();
+    CHECK(harness.flow.getStatus().state == ayt::net::OnlineFlowState::Leaving);
+    CHECK(harness.flow.getStatus().error == ayt::net::OnlineFlowError::WorldFailed);
+
+    harness.flow.update();
+    harness.bus.pump();
+    CHECK(harness.flow.getStatus().state == ayt::net::OnlineFlowState::Failed);
+    CHECK(harness.flow.getStatus().message ==
+          "replication bindings could not be restored");
+    CHECK_INT_EQ(deactivateCalls, 1);
+    CHECK(harness.bridge->getStatus().loadPending);
+    harness.loader->update(0.0f);
+    harness.bus.pump();
+    CHECK(harness.loader->currentScene()->name() == "MainMenu");
+    CHECK_FALSE(harness.bridge->getStatus().sessionSceneActive);
+}
+
+TEST_CASE(unexpected_scene_switch_fails_active_session_closed)
+{
+    uint32_t suspendCalls = 0;
+    uint32_t deactivateCalls = 0;
+    ActiveBridgeHarness harness("external_switch");
+    harness.initialize([&](auto& config) {
+        config.suspendSessionScene = [&](ayt::scene::Scene&) {
+            ++suspendCalls;
+        };
+        config.deactivateSessionScene = [&](ayt::scene::Scene&) {
+            ++deactivateCalls;
+        };
+    });
+    harness.activate();
+
+    ayt::scene::Scene rogue(ayt::scene::SceneMode::Play, "Rogue");
+    harness.scenes->setCurrent(&rogue);
+    harness.bus.post(ayt::event::SceneCurrentChangedEvent{&rogue});
+    harness.bus.pump();
+    CHECK(harness.flow.getStatus().state == ayt::net::OnlineFlowState::Leaving);
+    CHECK(harness.flow.getStatus().error == ayt::net::OnlineFlowError::WorldFailed);
+    CHECK_INT_EQ(suspendCalls, 1);
+    CHECK_INT_EQ(deactivateCalls, 1);
+
+    harness.flow.update();
+    harness.bus.pump();
+    harness.loader->update(0.0f);
+    harness.bus.pump();
+    CHECK(harness.flow.getStatus().state == ayt::net::OnlineFlowState::Failed);
+    CHECK(harness.loader->currentScene()->name() == "MainMenu");
+    CHECK_FALSE(harness.bridge->getStatus().sessionSceneActive);
 }
 
 TEST_SUITE_END

@@ -319,6 +319,7 @@ TEST_CASE(MainMenuLobbyArenaReplicationAndReturn)
     CHECK(catalog->addOrReplace({
         "maps/arena", "content-1", arenaPath.string(), "Arena"}));
     uint64_t preparedSeed = 0;
+    uint32_t deactivatedScenes = 0;
     online::OnlineSceneBridgeConfig bridgeConfig;
     bridgeConfig.contentResolver = catalog;
     bridgeConfig.mainMenuScenePath = menuPath.string();
@@ -329,6 +330,11 @@ TEST_CASE(MainMenuLobbyArenaReplicationAndReturn)
             std::string&) {
             preparedSeed = content.contentSeed;
             return scene.name() == "Arena";
+        };
+    bridgeConfig.deactivateSessionScene =
+        [&](ayt::scene::Scene& scene) {
+            CHECK(scene.name() == "Arena");
+            ++deactivatedScenes;
         };
     online::OnlineSceneBridge bridge(
         flow, *loader, std::move(bridgeConfig), bus);
@@ -424,6 +430,7 @@ TEST_CASE(MainMenuLobbyArenaReplicationAndReturn)
                loader->currentScene()->name() == "MainMenu";
     }));
     CHECK_FALSE(bridge.getStatus().sessionSceneActive);
+    CHECK_INT_EQ(deactivatedScenes, 1);
 
     (void)onlineServices->leaveLobby(lobbyId, PeerId{"vertical-guest"});
     bridge.shutdown();

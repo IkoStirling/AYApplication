@@ -73,6 +73,17 @@ struct OnlineSceneBridgeConfig {
                        ::ayt::scene::Scene&,
                        std::string&)> prepareSessionScene;
 
+    // Scene-owned replication/input registrations must not run while the
+    // transport is reconnecting or while the session is being torn down.
+    // suspend/deactivate are idempotently invoked at most once per lifecycle
+    // edge. deactivate runs while the old Scene is still alive.
+    std::function<void(::ayt::scene::Scene&)> suspendSessionScene;
+    std::function<bool(::ayt::scene::Scene&,
+                       uint64_t recoveryGeneration,
+                       uint32_t sessionEpoch,
+                       std::string&)> resumeSessionScene;
+    std::function<void(::ayt::scene::Scene&)> deactivateSessionScene;
+
     bool isValid() const;
 };
 
@@ -80,9 +91,14 @@ struct OnlineSceneBridgeStatus {
     bool ready = false;
     bool loadPending = false;
     bool sessionSceneActive = false;
+    bool sessionSceneSuspended = false;
+    bool sessionSceneDeactivated = false;
     bool mainMenuRecoveryRequired = false;
     uint64_t sceneRequestId = 0;
     uint64_t flowGeneration = 0;
+    uint64_t recoveryGeneration = 0;
+    uint64_t activeSessionId = 0;
+    uint32_t activeSessionEpoch = 0;
     ::ayt::net::OnlineContentDescriptor activeContent;
     std::string activeScenePath;
     std::string lastError;
