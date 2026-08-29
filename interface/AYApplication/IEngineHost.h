@@ -47,6 +47,8 @@ inline constexpr const char* kHostServicePhysicsQuery = "ayt.physics.IPhysicsQue
 inline constexpr const char* kHostServiceAudio        = "ayt.audio.AudioEngine";
 // PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家。
 inline constexpr const char* kHostServiceScenes       = "ayt.scene.SceneManager";
+inline constexpr const char* kHostServiceRuntimeSceneLoader =
+    "ayt.app.RuntimeSceneLoader";
 
 /// Process-scoped engine host: assembly + service discovery (not a gameplay module).
 class IEngineHost {

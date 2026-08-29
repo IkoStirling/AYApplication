@@ -6,11 +6,11 @@
 
 #include <AYApplication/RegisterDefaultModules.h>
 #include <AYApplication/IEngineHost.h>
+#include <AYApplication/RuntimeSceneLoader.h>
 
 #include <AYDevice/DeviceSubSystem.h>
 #include <AYDevice/DeviceInputProvider.h>
 #include <AYEntity/EntityModule.h>
-#include <AYScene.h>
 #include <AYScene/SceneManager.h>
 #include <AYScript/ScriptSubSystem.h>
 #include <AYGameLoop/SubSystemRegistry.h>
@@ -20,6 +20,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <utility>
 
 namespace ayt::app
 {
@@ -179,6 +180,28 @@ public:
         registerDefaultClientModules(opts);
         bindBuiltinHostServices(engineHost());
 
+        if (auto* scenes = engineHost().scenes()) {
+            RuntimeSceneLoaderConfig sceneConfig;
+            sceneConfig.initialSceneName =
+                _desc.name ? _desc.name : "Client";
+            if (_desc.scenePath != nullptr) {
+                sceneConfig.initialScenePath = _desc.scenePath;
+            }
+            if (_desc.enablePresentation) {
+                sceneConfig.onSceneActivated = [](::ayt::scene::Scene&) {
+                    // Systems resolving World::instance() must bind after the
+                    // new Play Scene has become SceneManager::current().
+                    ayt::entity::bootstrapModule();
+                };
+            }
+            if (registerRuntimeSceneLoader(
+                    *scenes, std::move(sceneConfig), &eventBus())) {
+                engineHost().provide(
+                    kHostServiceRuntimeSceneLoader,
+                    findRegisteredRuntimeSceneLoader());
+            }
+        }
+
         // INT-02: Script ← DeviceInputProvider. Lifetime: static provider
         // points at DeviceSubSystem's manager; ScriptSubSystem::shutdown
         // clears the provider before Device is destroyed.
@@ -203,12 +226,12 @@ public:
 
         onInit();
         registerSubSystems();
-        bootstrapClientPlayScene();
         loop.run();
 
         onPreShutdown();
-        teardownClientPlayScene();
         loop.shutdown();
+        engineHost().provide<IRuntimeSceneLoader>(
+            kHostServiceRuntimeSceneLoader, nullptr);
         // Phase 4 (a8c8be9) lesson applied: the host application, not
         // GameLoop, owns the per-instance EventBus listener cleanup.
         // Subscribers created via `_events.subscribe<T>(...)` (or via
@@ -229,51 +252,8 @@ public:
     }
 
 private:
-    /// P0 Client: own a Play Scene, optionally load `.ayscene`, setCurrent so
-    /// World::instance() / EntitySubSystem tick the Scene World (not the
-    /// process fallback). Re-bootstrap systems onto the active World when
-    /// presentation is enabled (first bootstrap may have targeted fallback).
-    void bootstrapClientPlayScene()
-    {
-        auto* sm = engineHost().scenes();
-        if (sm == nullptr) {
-            return;
-        }
-
-        _clientScene = std::make_unique<ayt::scene::Scene>(
-            ayt::scene::SceneMode::Play,
-            _desc.name ? _desc.name : "Client");
-
-        if (_desc.scenePath != nullptr && _desc.scenePath[0] != '\0') {
-            ayt::serializer::SerializeError err{};
-            if (!_clientScene->load(_desc.scenePath, &err)) {
-                std::fprintf(stderr,
-                    "[Application] failed to load scene '%s'\n",
-                    _desc.scenePath);
-            }
-        }
-
-        sm->setCurrent(_clientScene.get());
-
-        if (_desc.enablePresentation) {
-            // Systems register via World::instance() → now the Play Scene.
-            ayt::entity::bootstrapModule();
-        }
-    }
-
-    void teardownClientPlayScene()
-    {
-        if (auto* sm = engineHost().scenes()) {
-            if (sm->current() == _clientScene.get()) {
-                sm->setCurrent(nullptr);
-            }
-        }
-        _clientScene.reset();
-    }
-
     GameDesc       _desc;
     AppCommandLine _cmdLine;
-    std::unique_ptr<ayt::scene::Scene> _clientScene;
 
     // Host-owned EventBus subscriptions (Phase 4 §a8c8be9 lesson).
     // Connect listeners here instead of holding raw ScopedConnection

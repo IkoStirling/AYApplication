@@ -4,3 +4,4 @@
 #include <AYApplication/IApplication.h>
 #include <AYApplication/IEngineHost.h>
 #include <AYApplication/RegisterDefaultModules.h>
+#include <AYApplication/RuntimeSceneLoader.h>

@@ -11,6 +11,7 @@ set(SOURCES
     src/AYEngineHost.cpp
     src/AYEngineHostScope.cpp
     src/AYRegisterDefaultModules.cpp
+    src/AYRuntimeSceneLoader.cpp
     src/AYSceneLifecycleEventBridge.cpp
 )
 
@@ -20,6 +21,7 @@ set(HEADERS
     interface/AYApplication/IEngineHost.h
     interface/AYApplication/IHostPluginHooks.h
     interface/AYApplication/RegisterDefaultModules.h
+    interface/AYApplication/RuntimeSceneLoader.h
     
     include/AYApplication/SceneLifecycleEventBridge.h
 )
@@ -63,6 +65,26 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+)
+
+# Optional application/network bridge. Keeping this as a separate target
+# prevents ordinary AYApplication consumers from linking GNS and online
+# backend dependencies.
+add_library(AYOnlineApplication STATIC
+    online/src/AYOnlineApplication.cpp
+    online/interface/AYOnlineApplication/OnlineApplication.h
+)
+target_include_directories(AYOnlineApplication PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/online/interface
+)
+target_link_libraries(AYOnlineApplication PUBLIC
+    AYApplication
+    AYNetwork
+    AYScene
+)
+target_compile_options(AYOnlineApplication PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )

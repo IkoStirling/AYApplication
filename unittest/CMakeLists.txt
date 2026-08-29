@@ -9,6 +9,7 @@ set(SOURCES
     Test_AudioSubsystemRegistration.cpp
     Test_ServerAndPhysicsModules.cpp
     Test_HostExtensionsAndEvents.cpp
+    Test_RuntimeSceneLoader.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
@@ -130,3 +131,49 @@ target_compile_options(EngineHostTest PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
 
 ay_add_test(EngineHostTest)
+
+# Optional AYApplication/AYNetwork bridge tests stay isolated from the core
+# AYApplicationTest target so ordinary application tests do not gain a network
+# link dependency.
+add_executable(OnlineApplicationTest
+    TestMain.cpp
+    Test_OnlineApplicationBridge.cpp
+)
+target_link_libraries(OnlineApplicationTest PRIVATE
+    AYOnlineApplication
+    AYTest
+    AYScene
+)
+target_compile_options(OnlineApplicationTest PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+if(MSVC)
+    target_link_options(OnlineApplicationTest PRIVATE
+        "/FORCE:MULTIPLE"
+        "/IGNORE:4005"
+        "/IGNORE:4006")
+endif()
+ay_add_test(OnlineApplicationTest)
+
+# Runnable control-plane + scene + replication vertical slice.  It stays in a
+# dedicated process because SceneManager and the network runtime are
+# process-owned services in a real game client.
+add_executable(OnlineVerticalSliceTest
+    TestMain.cpp
+    Test_OnlineVerticalSlice.cpp
+)
+target_link_libraries(OnlineVerticalSliceTest PRIVATE
+    AYOnlineApplication
+    AYTest
+    AYScene
+)
+target_compile_options(OnlineVerticalSliceTest PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+if(MSVC)
+    target_link_options(OnlineVerticalSliceTest PRIVATE
+        "/FORCE:MULTIPLE"
+        "/IGNORE:4005"
+        "/IGNORE:4006")
+endif()
+ay_add_test(OnlineVerticalSliceTest)
