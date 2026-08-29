@@ -56,6 +56,54 @@ exactly and returns a local `.ayscene` path. Larger projects can implement
 `IOnlineContentResolver` with an asset manifest, entitlement check, patcher, or
 streaming installer without changing the network protocol.
 
+## Scene-backed Dedicated authority
+
+`DedicatedSceneHost` implements AYNetwork's `IDedicatedWorldHost` at the
+application layer. Each backend allocation resolves its logical content
+identity through the same trusted catalog, loads an independent Play `Scene`
+and `World`, ticks it from `DedicatedServerRuntime`, and releases it only after
+the last admitted player leaves or the allocation is fenced by the backend.
+Remote assignments never carry a filesystem path.
+
+Projects register authority-only gameplay systems and apply `contentSeed` in
+`DedicatedSceneHostConfig::prepareWorld`. Player connect/disconnect callbacks
+are the binding points for scene-owned replication and gameplay state. The
+library default for `maximumWorlds` is one because older systems that call the
+process-wide `World::instance()` are not multi-world safe. The generic server
+raises it to the registered player capacity so the backend can place several
+small matches in one process; set `AY_DEDICATED_MAX_WORLDS=1` for legacy game
+systems, or choose another explicit per-process world limit.
+
+The reusable code is split into `AYOnlineContent` (trusted content mapping),
+`AYOnlineApplication` (client scene bridge), and `AYDedicatedApplication`
+(headless authority bridge). The Dedicated process does not register client
+presentation subsystems. `AYScene` still reaches the monolithic `AYEntity`
+target, so presentation static libraries can remain on the link command until
+AYEntity core and render systems are split into separate targets.
+
+`AYApplication_DedicatedServer` is the deployable generic entry point. Its
+catalog is a trusted local tab-separated file:
+
+```text
+# content-id<TAB>version<TAB>scene-path<TAB>scene-name
+maps/arena	content-1	Content/Scenes/Arena.ayscene	ArenaAuthority
+```
+
+Relative scene paths resolve against the catalog directory. Start it with the
+same fleet token used by the SessionServer Dedicated routes:
+
+```powershell
+$env:AY_ONLINE_SERVER_TOKEN = "<fleet-token>"
+$env:AY_ONLINE_BACKEND_TLS = "true"
+.\AYApplication_DedicatedServer.exe `
+  api.example.com 443 ds-sg-01 asia build-42 `
+  203.0.113.20 7777 16 .\content-catalog.tsv
+```
+
+The generic executable registers component factories and loads/ticks real
+scenes. A game-specific executable should reuse `DedicatedSceneHost` and add
+its script, physics, replication, and authority systems in `prepareWorld`.
+
 ## Registration
 
 Register the optional assembly from `IApplication::onInit()`. The normal client
@@ -151,3 +199,9 @@ scene request when the online loading deadline expires.  The loopback
 replication sink is a test seam only; packaged games keep the same
 `ReplicationManager` calls and let the selected AYNetwork transport carry the
 sealed frames.
+
+`DedicatedOnlineVerticalSliceTest` is the server-side companion: it loads a
+real Arena Scene, starts the real GNS Dedicated listener, derives distinct
+per-player admission credentials, connects two clients, verifies that the
+world survives the first departure, and releases it after the final client
+leaves before draining the server.

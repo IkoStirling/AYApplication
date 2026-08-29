@@ -59,6 +59,25 @@ AYApplication 是 AY Engine 的**应用入口层**，负责：
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### 1.3 当前实现状态（2026-08-29）
+
+当前代码已经形成三条互相隔离的应用装配路径：
+
+| 路径 | 目标 | 状态 |
+|---|---|---|
+| 本地客户端/编辑器 | `AYApplication` | 已实现 Host、默认模块、运行时场景加载和生命周期事件桥接 |
+| 在线客户端 | `AYOnlineApplication` | 已实现 Backend-aware Online Flow、内容映射、加载失败恢复和会话场景切换 |
+| Dedicated 权威端 | `AYDedicatedApplication` + `AYApplication_DedicatedServer` | 已实现 allocation、可信内容解析、真实 `Scene/World`、逐玩家准入、tick、回收和 drain |
+
+在线内容映射被单独拆为 `AYOnlineContent`，客户端桥接与 Dedicated 桥接不相互
+依赖。网络协议、P2P、会话后端和 Dedicated control plane 仍由 AYNetwork
+拥有；本模块不复制这些职责。
+
+Dedicated 运行时是 headless 的：不会注册窗口、Renderer、UI 或 Audio。
+但 `AYScene -> AYEntity` 当前仍经过单体 AYEntity 目标，最终链接命令仍可能包含
+表现层静态库。这是构建体积问题，不是运行时初始化问题，后续应拆分 AYEntity
+Core 与 Render Systems。
+
 ---
 
 ## 2. 核心接口
@@ -601,10 +620,10 @@ AY_LOG(ERROR, "Failed to initialize renderer: %s", errorMsg);
 
 | 拓扑 | 描述 | 适用场景 | AY 支持 |
 |------|------|----------|---------|
-| **Dedicated Server** | 专用服务器，客户端只渲染 | MMO、竞技游戏 | ✅ 规划 |
-| **Listen Server** | 客户端同时作为服务器 | 合作游戏、P2P | ✅ 规划 |
-| **Peer-to-Peer** | 无服务器，客户端直连 | 街机游戏 | 规划 |
-| **Relay Server** | 中继服务器转发消息 | NAT 穿透 | 规划 |
+| **Dedicated Server** | 专用服务器，客户端只表现 | MMO、竞技游戏 | ✅ Scene-backed 第一版 |
+| **Listen Server** | 客户端同时作为权威主机 | 合作游戏、P2P | ✅ AYNetwork 会话层；项目装配待接入 |
+| **Peer-to-Peer** | 信令后建立客户端直连 | 合作、房间制游戏 | ✅ 直连/NAT 打洞已实现并完成公网验证 |
+| **Relay Server** | 中继服务器转发消息 | 无法打洞的 NAT | 规划；TURN 暂缓 |
 
 ### 8.3 NetworkDesc 配置
 
@@ -766,13 +785,44 @@ public:
 
 | 特性 | TCP | UDP | WebSocket |
 |------|-----|-----|-----------|
-| 可靠传输 | ✅ | ❌ | ✅ |
-| 有序 | ✅ | ❌ | ✅ |
-| 低延迟 | ❌ | ✅ | ❌ |
-| NAT 穿透 | ❌ | ❌ | ✅ |
+| 可靠传输 | ✅ | ✅ GNS reliable lane | ✅ |
+| 有序 | ✅ | ✅ 按 lane 配置 | ✅ |
+| 低延迟 | 一般 | ✅ | 一般 |
+| NAT 穿透 | ❌ | ✅ GNS ICE/direct | 信令通道，不承担打洞数据面 |
 | 浏览器支持 | ❌ | ❌ | ✅ |
-| 大数据分片 | ✅ | 规划 | ✅ |
-| 加密 (TLS) | ✅ | ❌ | ✅ |
+| 大数据分片 | ✅ | ✅ GNS | ✅ |
+| 加密 | TLS | GNS 会话加密 | TLS |
+
+### 8.9 在线应用与 Dedicated 权威场景
+
+实际在线装配链如下：
+
+```text
+Backend / Session Service
+          │ logical content identity + allocation
+          ▼
+AYNetwork DedicatedServerRuntime
+          │ IDedicatedWorldHost
+          ▼
+AYDedicatedApplication::DedicatedSceneHost
+          │ trusted content catalog
+          ▼
+AYScene::Scene (Play) ── owns ──> AYEntity::World
+          │
+          ├─ prepareWorld: 游戏模式、脚本、物理、复制、authority spawn
+          ├─ playerConnected/playerDisconnected: 玩家与场景实体绑定
+          └─ tick/deactivate: 权威模拟与确定性清理
+```
+
+安全边界：后端不得提供可直接访问的场景文件路径。`contentId + version`
+必须先通过服务器本地可信 catalog 或项目实现的 `IOnlineContentResolver`，然后
+才能加载 `.ayscene`。通用 TSV loader 对行数、行长、字段数量和目标普通文件
+进行限制，并以临时 catalog 完整解析成功后再替换现有映射。
+
+多世界边界：`DedicatedSceneHostConfig::maximumWorlds` 默认是 1。通用服务器
+入口默认将其提高到注册的玩家容量，使后端可以在同一进程放置多个小型比赛；
+任何仍调用 `World::instance()` 的游戏系统都必须通过
+`AY_DEDICATED_MAX_WORLDS=1` 保持单世界。
 
 ---
 
@@ -837,25 +887,34 @@ AY_MAIN_DECLARE_EX(MyGame);
 
 ```
 AYApplication/
+├── README.md
 ├── design.md
 ├── CMakeLists.txt
+├── docs/
+│   ├── engine-host.md
+│   └── online-application.md
 ├── interface/
-│   └── AYApplication/IApplication.h          # 应用接口
-│   └── AppCommandLine.h           # 命令行结构
-│
+│   └── AYApplication/                         # Host 稳定接口
 ├── include/
-│   ├── AYApplication.h            # 主入口
-│   └── ConfigFile.h               # 配置加载器
-│
+│   └── AYApplication/                         # 实现辅助接口
 ├── src/
-│   ├── AYApplicationImpl.cpp      # 实现
-│   ├── AppCommandLine.cpp         # 命令行解析
-│   └── ConfigFile.cpp             # 配置解析
-│
+│   ├── AYApplicationImpl.cpp
+│   ├── AYEngineHost.cpp
+│   └── AYRuntimeSceneLoader.cpp
+├── online/
+│   ├── interface/AYOnlineApplication/
+│   │   ├── OnlineContent.h
+│   │   ├── OnlineApplication.h
+│   │   └── DedicatedApplication.h
+│   ├── src/
+│   │   ├── AYOnlineContent.cpp
+│   │   ├── AYOnlineApplication.cpp
+│   │   └── AYDedicatedApplication.cpp
+│   └── tools/dedicated_server/main.cpp
 └── unittest/
-    ├── CMakeLists.txt
-    ├── AYApplicationTest.cpp
-    └── TestMain.cpp
+    ├── Test_OnlineApplicationBridge.cpp
+    ├── Test_OnlineVerticalSlice.cpp
+    └── Test_DedicatedOnlineVerticalSlice.cpp
 ```
 
 ---
@@ -1000,13 +1059,15 @@ cmake --build build-editor
 - [ ] CMake 构建类型选项
 
 ### Phase 5: 网络通信
-- [ ] NetworkDesc 配置结构
-- [ ] INetworkSubSystem 接口
-- [ ] TCP/UDP 传输层
-- [ ] 连接管理 (connect/disconnect)
-- [ ] 消息通道 (CHANNEL_RELIABLE/UNRELIABLE)
-- [ ] ReplicationManager 复制管理器
-- [ ] 复制协议 (状态同步)
+- [x] AYNetwork 提供 `INetworkSubSystem`、GNS 传输、连接管理和复制协议
+- [x] 客户端 Backend-aware Online Flow 与场景加载桥接
+- [x] 精确版本内容目录与可信本地场景解析
+- [x] Dedicated allocation 到真实 `Scene/World` 的权威端桥接
+- [x] 通用 `AYApplication_DedicatedServer` 入口与 drain 生命周期
+- [x] 真实 listener + 两客户端准入/离开/世界释放纵向测试
+- [ ] 游戏项目 authority systems 接入（脚本、物理、复制、实体生成）
+- [ ] 生产会话后端分配到两客户端入场的跨进程 E2E
+- [ ] AYEntity Core / Render Systems 构建目标拆分
 
 ### Phase 6: 版本与帮助
 - [ ] 版本信息 (getVersion, getEngineVersion)
@@ -1029,8 +1090,8 @@ cmake --build build-editor
 | 多平台入口 | ✅ | ✅ | ✅ | ✅ |
 | 多应用类型 | ✅ 规划 | ✅ Game/Editor | ✅ | ✅ |
 | 日志初始化 | ✅ 基础 | ✅ | ✅ | ✅ |
-| 网络通信 | 规划 | ✅ | ✅ | ✅ |
-| Replication 复制 | 规划 | ✅ | ✅ | ✅ |
+| 网络通信 | ✅ AYNetwork + 应用桥接 | ✅ | ✅ | ✅ |
+| Replication 复制 | ✅ AYNetwork；游戏绑定待接入 | ✅ | ✅ | ✅ |
 | 版本管理 | ❌ | ✅ | ✅ | ✅ |
 | 用户数据路径 | ❌ | ✅ | ✅ | ✅ |
 | Crash Handler | ❌ | ✅ | ✅ | ✅ |
@@ -1056,10 +1117,22 @@ cmake --build build-editor
 6. **模块完全 CMake 化** - 当前代码控制，尚未迁移到 CMake
 
 **当前优先级**：
-1. 完善命令行解析 (AppCommandLine)
-2. 添加 ConfigFile 支持
-3. 多应用类型支持（BuildType + SubSystemType）
-4. CMake 构建类型控制
+1. 在游戏项目中实现 authority bootstrap，并通过 `prepareWorld` 注册真实游戏模式、脚本、物理和复制系统
+2. 完成“生产 Session Backend 分配 → Dedicated 加载指定内容 → 两客户端准入 → 场景复制”的跨进程 E2E
+3. 增加失败验收：内容版本缺失、场景加载失败、第二世界超限、后台 fencing、drain 超时
+4. 拆分 AYEntity Core / Render Systems，缩小 Dedicated 链接面与部署包
+
+### 13.4 下一阶段验收条件
+
+下一阶段不是继续扩展通用网络协议，而是把当前通用权威宿主接到一个真实游戏
+项目。完成标准：
+
+1. 同一份 `contentId + version + contentSeed` 在 Dedicated 端加载确定的游戏场景。
+2. `prepareWorld` 注册项目 authority systems，至少生成一个可复制玩家实体和一个权威物理对象。
+3. 两个独立客户端经生产 Session Backend 获得逐玩家 admission token 并进入同一 allocation。
+4. 客户端收到初始快照和后续状态变化；第一名玩家离开不卸载世界，最后一名玩家离开后释放 allocation。
+5. 内容不匹配、准入失败、backend fencing 和进程 drain 都产生可检索日志并确定性清理场景。
+6. 测试至少覆盖本机跨进程；公网/云端验证复用相同命令与内容 catalog，不另设测试专用协议。
 
 ---
 

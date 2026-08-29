@@ -4,7 +4,6 @@
 #include <AYEventSystem/Events/SceneEvents.h>
 #include <AYGameLoop/SubSystemRegistry.h>
 
-#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -23,48 +22,6 @@ bool isMenuState(::ayt::net::OnlineFlowState state) {
 }
 
 } // namespace
-
-bool OnlineContentMapping::isValid() const {
-    return !contentId.empty() && contentId.size() <= 128 &&
-           !contentVersion.empty() && contentVersion.size() <= 64 &&
-           !scenePath.empty() && scenePath.size() <= kMaximumScenePathLength &&
-           sceneName.size() <= kMaximumSceneNameLength;
-}
-
-bool OnlineContentCatalog::addOrReplace(OnlineContentMapping mapping) {
-    if (!mapping.isValid()) return false;
-    const auto found = std::find_if(
-        _mappings.begin(), _mappings.end(), [&](const auto& current) {
-            return current.contentId == mapping.contentId &&
-                   current.contentVersion == mapping.contentVersion;
-        });
-    if (found == _mappings.end()) {
-        _mappings.push_back(std::move(mapping));
-    } else {
-        *found = std::move(mapping);
-    }
-    return true;
-}
-
-OnlineContentResolveResult OnlineContentCatalog::resolve(
-    const ::ayt::net::OnlineContentDescriptor& content) const {
-    if (!content.isValid()) {
-        return {.message = "Online content descriptor is invalid"};
-    }
-    const auto found = std::find_if(
-        _mappings.begin(), _mappings.end(), [&](const auto& mapping) {
-            return mapping.contentId == content.contentId &&
-                   mapping.contentVersion == content.contentVersion;
-        });
-    if (found == _mappings.end()) {
-        return {.message = "Content is not installed: " + content.contentId +
-                           "@" + content.contentVersion};
-    }
-    return {
-        .scenePath = found->scenePath,
-        .sceneName = found->sceneName,
-    };
-}
 
 bool OnlineSceneBridgeConfig::isValid() const {
     return contentResolver != nullptr && !mainMenuScenePath.empty() &&

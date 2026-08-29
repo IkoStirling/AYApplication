@@ -5,12 +5,12 @@
 #include <AYApplication/IEngineHost.h>
 #include <AYApplication/RuntimeSceneLoader.h>
 #include <AYNetwork/Session/OnlineFlowSubSystem.h>
+#include <AYOnlineApplication/OnlineContent.h>
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace ayt::scene { class Scene; }
 
@@ -21,43 +21,6 @@ inline constexpr const char* kHostServiceOnlineFlow =
     "ayt.net.OnlineFlowCoordinator";
 inline constexpr const char* kHostServiceOnlineApplication =
     "ayt.app.online.OnlineApplication";
-
-struct OnlineContentResolveResult {
-    std::string scenePath;
-    std::string sceneName;
-    std::string message;
-
-    bool isValid() const { return !scenePath.empty(); }
-};
-
-class IOnlineContentResolver {
-public:
-    virtual ~IOnlineContentResolver() = default;
-    virtual OnlineContentResolveResult resolve(
-        const ::ayt::net::OnlineContentDescriptor& content) const = 0;
-};
-
-struct OnlineContentMapping {
-    std::string contentId;
-    std::string contentVersion;
-    std::string scenePath;
-    std::string sceneName;
-
-    bool isValid() const;
-};
-
-// Small exact-version catalog suitable for the first integration. Projects
-// can replace it with an asset manifest/downloader by implementing the same
-// resolver interface.
-class OnlineContentCatalog final : public IOnlineContentResolver {
-public:
-    bool addOrReplace(OnlineContentMapping mapping);
-    OnlineContentResolveResult resolve(
-        const ::ayt::net::OnlineContentDescriptor& content) const override;
-
-private:
-    std::vector<OnlineContentMapping> _mappings;
-};
 
 struct OnlineSceneBridgeConfig {
     std::shared_ptr<IOnlineContentResolver> contentResolver;

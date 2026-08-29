@@ -69,9 +69,27 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )
 
-# Optional application/network bridge. Keeping this as a separate target
-# prevents ordinary AYApplication consumers from linking GNS and online
-# backend dependencies.
+# Shared content identity -> installed scene mapping. This deliberately stays
+# independent of the full AYApplication target so server-side code need not
+# depend on the client application bridge.
+add_library(AYOnlineContent STATIC
+    online/src/AYOnlineContent.cpp
+    online/interface/AYOnlineApplication/OnlineContent.h
+)
+target_include_directories(AYOnlineContent PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/online/interface
+)
+target_link_libraries(AYOnlineContent PUBLIC
+    AYNetwork
+)
+target_compile_options(AYOnlineContent PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+)
+
+# Optional client application/network bridge. Keeping this as a separate
+# target prevents ordinary AYApplication consumers from linking GNS and
+# online backend dependencies.
 add_library(AYOnlineApplication STATIC
     online/src/AYOnlineApplication.cpp
     online/interface/AYOnlineApplication/OnlineApplication.h
@@ -82,9 +100,44 @@ target_include_directories(AYOnlineApplication PUBLIC
 target_link_libraries(AYOnlineApplication PUBLIC
     AYApplication
     AYNetwork
+    AYOnlineContent
     AYScene
 )
 target_compile_options(AYOnlineApplication PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+)
+
+# Server-side scene/world integration is separate from the client application
+# bridge. It runs headlessly; AYScene's current monolithic AYEntity dependency
+# can still place presentation static libraries on the final link line.
+add_library(AYDedicatedApplication STATIC
+    online/src/AYDedicatedApplication.cpp
+    online/interface/AYOnlineApplication/DedicatedApplication.h
+)
+target_include_directories(AYDedicatedApplication PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/online/interface
+)
+target_link_libraries(AYDedicatedApplication PUBLIC
+    AYNetwork
+    AYOnlineContent
+    AYScene
+)
+target_compile_options(AYDedicatedApplication PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+)
+
+# Scene-backed headless authority executable. AYNetwork keeps its generic
+# runtime shell free of AYScene; this application-layer target performs the
+# trusted content-ID -> local scene mapping and owns real Scene/World objects.
+add_executable(AYApplication_DedicatedServer
+    online/tools/dedicated_server/main.cpp
+)
+target_link_libraries(AYApplication_DedicatedServer PRIVATE
+    AYDedicatedApplication
+)
+target_compile_options(AYApplication_DedicatedServer PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )

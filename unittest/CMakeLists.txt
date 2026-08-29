@@ -177,3 +177,28 @@ if(MSVC)
         "/IGNORE:4006")
 endif()
 ay_add_test(OnlineVerticalSliceTest)
+
+# Real Dedicated control/data/scene vertical slice. Three GNS subsystem
+# instances run in one process: one scene-backed authority and two admitted
+# clients. Keep it separate from the process-global client SceneManager tests.
+add_executable(DedicatedOnlineVerticalSliceTest
+    TestMain.cpp
+    Test_DedicatedOnlineVerticalSlice.cpp
+)
+target_link_libraries(DedicatedOnlineVerticalSliceTest PRIVATE
+    AYDedicatedApplication
+    AYTest
+    AYScene
+)
+target_compile_options(DedicatedOnlineVerticalSliceTest PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+target_compile_definitions(DedicatedOnlineVerticalSliceTest PRIVATE
+    AYNETWORK_BUILD_TESTS)
+if(MSVC)
+    target_link_options(DedicatedOnlineVerticalSliceTest PRIVATE
+        "/FORCE:MULTIPLE"
+        "/IGNORE:4005"
+        "/IGNORE:4006")
+endif()
+ay_add_test(DedicatedOnlineVerticalSliceTest)
