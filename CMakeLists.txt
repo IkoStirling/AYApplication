@@ -8,6 +8,8 @@ project(AYApplication
 set(SOURCES
     src/AYApplicationImpl.cpp
     src/AYAppEventHost.cpp
+    src/AYEngineModuleContext.cpp
+    src/AYEngineModuleRuntime.cpp
     src/AYEngineHost.cpp
     src/AYEngineHostScope.cpp
     src/AYRegisterDefaultModules.cpp
@@ -18,6 +20,8 @@ set(SOURCES
 set(HEADERS
     interface/AYApplication/IApplication.h
     interface/AYApplication/AppEventHost.h
+    interface/AYApplication/EngineModuleContext.h
+    interface/AYApplication/EngineModuleRuntime.h
     interface/AYApplication/IEngineHost.h
     interface/AYApplication/IHostPluginHooks.h
     interface/AYApplication/RegisterDefaultModules.h
@@ -37,6 +41,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME} PUBLIC
     AYCore
     AYGameLoop
+    AY::Module
     # AYAudio and AYDeviceSubSystem are linked PRIVATE so their libs (and their
     # own PRIVATE win32 deps) do not leak onto the link line of consumers
     # (AYEditor, AYEditorShell_Demo, AYEditorShutdownRepro). ApplicationImpl is

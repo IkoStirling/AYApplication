@@ -1136,7 +1136,32 @@ cmake --build build-editor
 
 ---
 
-## 14. 参考
+## 14. AYModule 启动装配边界
+
+AYApplication 通过 `EngineModuleContext` 和 `EngineModuleRuntime` 接入独立
+AYModule，但当前默认 Client、Server、Editor 装配仍使用既有注册函数。这个
+阶段只建立依赖方向和生命周期边界，不迁移任何现有运行时模块。
+
+生命周期分为两个显式入口：
+
+1. `prepare()`：冻结模块集合、解析依赖，并让所有模块完成
+   `registerTypes()`。
+2. `install()`：在 Host 锁定组件或反射注册表后安装服务与 SubSystem。
+
+`EngineModuleRuntime` 持有模块，不持有 `IEngineHost`。因此关闭必须由 Host
+在自身及其服务仍然有效时显式调用 `shutdown()`。安装失败的逆序回滚由
+AYModule 负责；类型注册不提供通用回滚。
+
+当前非目标：
+
+- 不修改 `registerDefaultClientModules()` 和
+  `registerDefaultServerModules()`；
+- 不接管 GameLoop 的 `ISubSystem` 所有权；
+- 不实现动态插件加载、热卸载或 C ABI；
+- 不引入 `ComponentRegistry`，只为其保留
+  `prepare() -> seal -> install()` 边界。
+
+## 15. 参考
 
 - [O3DE Application](https://docs.o3de.org/)
 - [Unreal Engine Launch](https://docs.unrealengine.com/en-US/Programming/Development/Architecture/UnrealArchitecture/)

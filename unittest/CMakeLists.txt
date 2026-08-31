@@ -132,6 +132,35 @@ target_compile_options(EngineHostTest PRIVATE
 
 ay_add_test(EngineHostTest)
 
+# -----------------------------------------------------------------------------
+# EngineModuleRuntimeTest - isolated AYModule/Host adapter tests. This target
+# deliberately uses test-only modules and does not invoke default engine module
+# registration, so the integration introduces no runtime migration.
+# -----------------------------------------------------------------------------
+add_executable(EngineModuleRuntimeTest
+    TestMain.cpp
+    Test_EngineModuleRuntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/AYEngineModuleContext.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/AYEngineModuleRuntime.cpp
+)
+
+target_include_directories(EngineModuleRuntimeTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../interface
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+target_link_libraries(EngineModuleRuntimeTest PRIVATE
+    AY::Module
+    AYGameLoop
+    AYTest
+)
+
+target_compile_options(EngineModuleRuntimeTest PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+
+ay_add_test(EngineModuleRuntimeTest)
+
 # Optional AYApplication/AYNetwork bridge tests stay isolated from the core
 # AYApplicationTest target so ordinary application tests do not gain a network
 # link dependency.

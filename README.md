@@ -20,6 +20,8 @@ AYApplication 是引擎 Host 装配层，负责应用启动、子系统注册、
 
 ```cpp
 #include <AYApplication.h>
+#include <AYApplication/EngineModuleContext.h>
+#include <AYApplication/EngineModuleRuntime.h>
 #include <AYApplication/IApplication.h>
 #include <AYApplication/IEngineHost.h>
 #include <AYApplication/RegisterDefaultModules.h>
@@ -32,6 +34,18 @@ AYApplication 是引擎 Host 装配层，负责应用启动、子系统注册、
 稳定客户端接口位于 `interface/AYApplication/`，在线集成接口位于
 `online/interface/AYOnlineApplication/`，实现辅助头位于
 `include/AYApplication/`。
+
+## AYModule 接线
+
+`EngineModuleContext` 将 `IEngineHost::findService()` 适配到独立的
+`IModuleContext`；`EngineModuleRuntime` 持有一个 `ModuleManager`，
+提供 `prepare()`、`install()` 和逆序 `shutdown()`。其中
+`prepare()` 只完成依赖解析和类型注册，调用方可以在 `install()` 前锁定
+组件或反射注册表。
+
+当前接入只建立 Host 与 AYModule 的边界，没有替换
+`registerDefaultClientModules()`、`registerDefaultServerModules()` 或编辑器
+装配，也没有让任何现有运行时模块实现 `IModule`。
 
 ## Scene-backed Dedicated Server
 
