@@ -1139,8 +1139,9 @@ cmake --build build-editor
 ## 14. AYModule 启动装配边界
 
 AYApplication 通过 `EngineModuleContext` 和 `EngineModuleRuntime` 接入独立
-AYModule，但当前默认 Client、Server、Editor 装配仍使用既有注册函数。这个
-阶段只建立依赖方向和生命周期边界，不迁移任何现有运行时模块。
+AYModule，但当前默认 Client、Server、Editor 装配仍使用既有注册函数。
+AYEntity 的 `EntityComponentModule` 是第一个 opt-in 试点，只迁移组件类型
+注册阶段，不接管任何 GameLoop SubSystem。
 
 生命周期分为两个显式入口：
 
@@ -1158,8 +1159,8 @@ AYModule 负责；类型注册不提供通用回滚。
   `registerDefaultServerModules()`；
 - 不接管 GameLoop 的 `ISubSystem` 所有权；
 - 不实现动态插件加载、热卸载或 C ABI；
-- 不引入 `ComponentRegistry`，只为其保留
-  `prepare() -> seal -> install()` 边界。
+- `ComponentRegistry` 由 AYEntity 实现并由 Host 在
+  `prepare() -> seal -> install()` 边界显式封存；AYApplication 不拥有它。
 
 ## 15. 参考
 

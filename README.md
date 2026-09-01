@@ -43,9 +43,9 @@ AYApplication 是引擎 Host 装配层，负责应用启动、子系统注册、
 `prepare()` 只完成依赖解析和类型注册，调用方可以在 `install()` 前锁定
 组件或反射注册表。
 
-当前接入只建立 Host 与 AYModule 的边界，没有替换
-`registerDefaultClientModules()`、`registerDefaultServerModules()` 或编辑器
-装配，也没有让任何现有运行时模块实现 `IModule`。
+AYEntity 当前提供首个注册阶段试点 `EntityComponentModule`。Host 使用它时在
+`prepare()` 后封存 `ComponentRegistry`，再调用 `install()`。默认 Client、
+Server、Editor 装配仍未替换，也未迁移 GameLoop SubSystem 所有权。
 
 ## Scene-backed Dedicated Server
 
