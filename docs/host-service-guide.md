@@ -212,6 +212,8 @@ class IEngineHost {
 ```
 
 provider 自己保证生命周期:典型 `unique_ptr` 由 SubSystem 持有,host 仅存裸指针。
+生产入口用 `EngineRuntimeScope` 对内置服务、任务 hook、Scene 选择与活动 World
+做成组快照和恢复；scope 必须先于模块安装创建，并晚于模块关闭释放。
 
 ### 6.2 清理协议
 
@@ -227,7 +229,7 @@ XSubSystem::~XSubSystem() {
 }
 ```
 
-或者集中式清:`bindBuiltinHostServices` 的反向,在 shutdown 时:
+兼容路径若绕过 `EngineRuntimeScope`，必须在 shutdown 时清掉对应 key：
 
 ```cpp
 host.provide(kHostServicePhysics, nullptr);
@@ -246,6 +248,7 @@ host.provide(kHostServicePhysicsQuery, nullptr);
         → module.shutdown 调 uninstallSubSystem (noexcept)
             → GameLoop unregister SubSystem
             → ~SubSystem() 跑 → 清 provide 表
+    → EngineRuntimeScope::reset()  ← 恢复服务、hook、Scene 与 World
     → ~DefaultEngineHost (Meyers 单例逆序析构)
     → 全局 statics 析构
 ```

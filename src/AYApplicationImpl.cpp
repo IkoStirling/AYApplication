@@ -6,6 +6,7 @@
 
 #include <AYApplication/RegisterDefaultModules.h>
 #include <AYApplication/IEngineHost.h>
+#include <AYApplication/EngineRuntimeScope.h>
 #include <AYApplication/RuntimeSceneLoader.h>
 
 #include <AYScene/SceneManager.h>
@@ -124,7 +125,9 @@ public:
     {
         if (_moduleRuntime) {
             _moduleRuntime->shutdown();
+            _moduleRuntime.reset();
         }
+        _runtimeScope.reset();
     }
 
     explicit ApplicationImpl(const GameDesc& desc, const AppCommandLine& cmdLine)
@@ -177,6 +180,10 @@ public:
             return;
         }
 
+        // Snapshot process-wide host/scene state before module installation;
+        // modules may publish services that belong to this runtime.
+        auto runtimeScope = std::make_unique<EngineRuntimeScope>(engineHost());
+
         const bool enablePhysics = kApplicationHasPhysics
             && _desc.enablePhysics && !_cmdLine.noPhysics;
 
@@ -193,7 +200,8 @@ public:
             installConfiguredRuntime(
                 std::move(runtime),
                 std::move(configured));
-            bindBuiltinHostServices(engineHost());
+            _runtimeScope = std::move(runtimeScope);
+            _runtimeScope->refresh();
             return;
         }
 
@@ -234,7 +242,8 @@ public:
         installConfiguredRuntime(
             std::move(runtime),
             std::move(configured));
-        bindBuiltinHostServices(engineHost());
+        _runtimeScope = std::move(runtimeScope);
+        _runtimeScope->refresh();
 
         // INT-02: Script ← DeviceInputProvider. Lifetime: static provider
         // points at DeviceSubSystem's manager; ScriptSubSystem::shutdown
@@ -270,8 +279,7 @@ public:
             _moduleRuntime->shutdown();
             _moduleRuntime.reset();
         }
-        engineHost().provide<IRuntimeSceneLoader>(
-            kHostServiceRuntimeSceneLoader, nullptr);
+        _runtimeScope.reset();
         // Phase 4 (a8c8be9) lesson applied: the host application, not
         // GameLoop, owns the per-instance EventBus listener cleanup.
         // Subscribers created via `_events.subscribe<T>(...)` (or via
@@ -316,6 +324,7 @@ private:
     GameDesc       _desc;
     AppCommandLine _cmdLine;
     std::unique_ptr<EngineModuleRuntime> _moduleRuntime;
+    std::unique_ptr<EngineRuntimeScope> _runtimeScope;
 
     // Host-owned EventBus subscriptions (Phase 4 §a8c8be9 lesson).
     // Connect listeners here instead of holding raw ScopedConnection

@@ -13,7 +13,7 @@
 | 角色 | 模块 | 职责 |
 |------|------|------|
 | 产品入口 | `IApplication`（Client=`ApplicationImpl`，Editor=`EditorApp`） | 选壳、CLI、生命周期钩子 |
-| **引擎外壳** | `IEngineHost` + `EngineModuleRuntime` + `configureDefault*Modules` | 模块依赖、当前 Host、SubSystem 发布、**服务表** |
+| **引擎外壳** | `IEngineHost` + `EngineModuleRuntime` + `EngineRuntimeScope` + `configureDefault*Modules` | 模块依赖、当前 Host、SubSystem 发布、服务表与 World/Scene 生命周期 |
 | 帧循环 | `AYGameLoop` | `fixedUpdate` / `update`、暂停、帧率 |
 | 扩展（以后） | `AYPlugin` | 往 Host 扩展点填实现 |
 
@@ -21,10 +21,11 @@
 
 ## 2. 默认装配表（CR 用）
 
-生产入口统一执行：`configure -> prepare -> ComponentRegistry::seal -> install`
-→ `bindBuiltinHostServices` → GameLoop 初始化。GameLoop 负责 SubSystem 的
-`initialize/update/shutdown`；`EngineModuleRuntime::shutdown()` 随后按模块逆序
-撤销仍存在的注册，Host scope 最后清空服务表。旧 `registerDefault*Modules()`
+生产入口在模块安装前创建 `EngineRuntimeScope`，再统一执行：
+`configure -> prepare -> ComponentRegistry::seal -> install -> scope.refresh()`
+→ GameLoop 初始化。GameLoop 负责 SubSystem 的 `initialize/update/shutdown`；
+`EngineModuleRuntime::shutdown()` 随后按模块逆序撤销仍存在的注册，最后由
+scope 恢复进入本次运行前的 Host 服务、任务 hook、Scene 选择与活动 World。旧 `registerDefault*Modules()`
 保留为直接注册兼容 API，不再是 `ApplicationImpl` / `EditorApp` 的默认路径。
 
 ### 2.1 Client（`configureDefaultClientModules`）
@@ -45,7 +46,7 @@
 | 12 | `AYAudio.Runtime`（可选） | `-no-audio` 则跳过 |
 | 13 | `AYApplication.RuntimeSceneLoader`（可选） | Egress 帧边界场景加载；初始化时创建或加载 Client Play Scene，并切换活动 World |
 | 14 | `GameDesc::configureModules`（可选） | 项目在依赖解析前追加 Video/Online 等节点 |
-| 15 | `bindBuiltinHostServices` | 写入 Host 服务表（含 RuntimeSceneLoader）；安装 Scene→EventBus 观察者；安装 AYTask→`TaskCompleteEvent` hook |
+| 15 | `EngineRuntimeScope::refresh` | 写入 Host 服务表（含 RuntimeSceneLoader）；安装 Scene→EventBus 观察者；安装 AYTask→`TaskCompleteEvent` hook；退出时成组恢复 |
 
 ### 2.1.1 引擎事件生产者（Host 装配后）
 
@@ -74,7 +75,7 @@
 | 9 | `AYEntity.ScriptIntegration` + `AYScript.Runtime` | ScriptComponent 与 Logia |
 | 10 | `AYEntity.NetworkIntegration` + `AYNetwork.Runtime` | NetworkComponent 与 Network SubSystem |
 | 11 | `AYAudio.Runtime`（可选） | `-no-audio` 跳过；供 Tools → Audio Editor |
-| 12 | Host 接线 | `bindBuiltinHostServices`；Editor 自有 `DeviceManager` 与 Script 输入桥仍由 App 持有 |
+| 12 | Host 接线 | `EngineRuntimeScope::refresh`；Editor 自有 `DeviceManager` 与 Script 输入桥仍由 App 持有 |
 | 13 | Play World 系统 | `beginPlay` 后为新的 Play Scene World 调用兼容 bootstrap |
 
 ### 2.3 Server（`configureDefaultServerModules` / `-server`）
@@ -87,7 +88,7 @@
 | 4 | `AYEntity.PhysicsIntegration`（可选） | Physics 组件与固定步 ECS 桥 |
 | 5 | `AYEntity.ScriptIntegration`（可选） | ScriptComponent 类型注册 |
 | 6 | `AYScript.Runtime`（可选） | `enableScript`；依赖 Script integration |
-| 7 | `bindBuiltinHostServices` | 无 Device / Audio / Renderer |
+| 7 | `EngineRuntimeScope::refresh` | 无 Device / Audio / Renderer；退出时恢复进入前状态 |
 
 **跳过** Device / Audio / Renderer。`ApplicationImpl`：`GameDesc::serverMode` 或 CLI `-server`。
 
@@ -159,7 +160,9 @@ auto* inv = host->service<InventorySystem>("game.inventory");
 | `scenes()` | PR-6 (v0.1.3)：已 `provide` 的指针，否则回退 `SceneManager::instance()`（**永不为 null**） |
 | `findSubSystem(name)` | 逃生口；新代码优先具名/键服务，不要靠字符串找业务 API |
 
-`ApplicationImpl::run` / `EditorApp::run` 内使用 `EngineHostScope`；装配后调用 `bindBuiltinHostServices`。
+`ApplicationImpl::run` / `EditorApp::run` 内使用 `EngineHostScope` 选择当前 Host；
+它们还在模块安装前创建 `EngineRuntimeScope`，装配后调用 `refresh()`。关闭时先
+销毁模块，再由 scope 恢复服务表、任务 hook、Scene 选择和活动 World。
 
 Physics 默认经模块图注册；兼容调用方也可手动：
 
@@ -237,7 +240,7 @@ if (auto* save = host.service<ayt::save::SaveService>(kHostServiceSave)) {
 
 ## 5. CR 纪律
 
-1. 默认 Host 走 `configureDefault*Modules -> GameDesc::configureModules -> prepare -> seal -> install`，随后 `bindBuiltinHostServices`；`registerDefault*Modules` 仅作兼容。
+1. 默认 Host 走 `EngineRuntimeScope -> configureDefault*Modules -> GameDesc::configureModules -> prepare -> seal -> install -> scope.refresh()`；`registerDefault*Modules` 仅作兼容。
 2. 业务取资源/音频/物理：`currentEngineHost()->resources()/audio()/physics()`。  
 3. 新全局能力：走 §4，不要只加单例。  
 4. 改装配顺序：先改 §2 表再改 helper。  

@@ -200,6 +200,13 @@ TEST_CASE(scene_lifecycle_emits_begin_and_end_play)
 
 TEST_CASE(physics_query_lazy_after_subsystem_init)
 {
+    providePhysicsQuery(defaultEngineHost(), nullptr);
+    providePhysics(defaultEngineHost(), nullptr);
+
+    auto& loop = ayt::game::IGameLoop::instance();
+    loop.unregisterSubSystem("EntityPhysicsBridge");
+    loop.unregisterSubSystem("Physics");
+
     ayt::physics::PhysicsBackendDescriptor desc{};
     desc.kind3D = ayt::physics::BackendKind::Mock;
     registerPhysicsModule(desc);
@@ -213,6 +220,10 @@ TEST_CASE(physics_query_lazy_after_subsystem_init)
     CHECK(defaultEngineHost().physicsQuery()->isReady());
 
     phys->shutdown();
+    loop.unregisterSubSystem("EntityPhysicsBridge");
+    loop.unregisterSubSystem("Physics");
+    providePhysicsQuery(defaultEngineHost(), nullptr);
+    providePhysics(defaultEngineHost(), nullptr);
 }
 
 TEST_SUITE_END

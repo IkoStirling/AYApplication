@@ -115,7 +115,9 @@ void setCurrentEngineHost(IEngineHost* host);
 ayt::event::EventBus& resolveEventBus();
 
 /// Wire well-known builtins into `host` (resources singleton; audio/physics if available).
-/// Call after default module registration (and again after GameLoop init if audio was null).
+/// This is a refresh-only compatibility entry point. Runtime owners should use
+/// EngineRuntimeScope so services, process hooks, Scene selection and the active
+/// World are restored together. Call again after initialization if audio was null.
 void bindBuiltinHostServices(IEngineHost& host);
 
 /// P1: register a PhysicsManager into the host service table (`kHostServicePhysics`).

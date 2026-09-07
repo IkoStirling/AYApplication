@@ -12,6 +12,7 @@ set(SOURCES
     src/AYEngineModuleRuntime.cpp
     src/AYEngineHost.cpp
     src/AYEngineHostScope.cpp
+    src/AYEngineRuntimeScope.cpp
     src/AYRegisterDefaultModules.cpp
     src/AYRuntimeSceneLoader.cpp
     src/AYRuntimeSceneLoaderModule.cpp
@@ -24,6 +25,7 @@ set(HEADERS
     interface/AYApplication/EngineModuleContext.h
     interface/AYApplication/EngineModuleRuntime.h
     interface/AYApplication/IEngineHost.h
+    interface/AYApplication/EngineRuntimeScope.h
     interface/AYApplication/IHostPluginHooks.h
     interface/AYApplication/RegisterDefaultModules.h
     interface/AYApplication/RuntimeSceneLoader.h
@@ -138,6 +140,10 @@ if(NOT AY_APPLICATION_HAS_AUDIO AND
         $<$<CXX_COMPILER_ID:MSVC>: /W4>
         $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
     )
+    if(BUILD_TESTING)
+        add_test(NAME AYApplication_HeadlessSmoke
+            COMMAND AYApplication_HeadlessSmoke)
+    endif()
 endif()
 
 # Shared content identity -> installed scene mapping. This deliberately stays
@@ -218,7 +224,11 @@ target_compile_options(AYApplication_DedicatedServer PRIVATE
 )
 endif()
 
-if(BUILD_TESTING)
+if(BUILD_TESTING AND
+   (AY_APPLICATION_HAS_AUDIO OR AY_APPLICATION_HAS_DEVICE OR
+    AY_APPLICATION_HAS_PRESENTATION OR AY_APPLICATION_HAS_2D OR
+    AY_APPLICATION_HAS_PHYSICS OR AY_APPLICATION_HAS_SCRIPT OR
+    AY_APPLICATION_HAS_NETWORK))
     enable_testing()
     add_subdirectory(unittest)
 endif()

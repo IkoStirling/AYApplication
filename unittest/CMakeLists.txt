@@ -132,6 +132,27 @@ target_compile_options(EngineHostTest PRIVATE
 
 ay_add_test(EngineHostTest)
 
+add_executable(EngineRuntimeScopeTest
+    TestMain.cpp
+    Test_EngineRuntimeScope.cpp
+)
+target_link_libraries(EngineRuntimeScopeTest PRIVATE
+    AYApplication
+    AYScene
+    AYTask
+    AYTest
+)
+target_compile_options(EngineRuntimeScopeTest PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+if(MSVC)
+    target_link_options(EngineRuntimeScopeTest PRIVATE
+        "/FORCE:MULTIPLE"
+        "/IGNORE:4005"
+        "/IGNORE:4006")
+endif()
+ay_add_test(EngineRuntimeScopeTest)
+
 # -----------------------------------------------------------------------------
 # EngineModuleRuntimeTest - isolated AYModule/Host adapter tests. This target
 # deliberately uses test-only modules and does not invoke default engine module

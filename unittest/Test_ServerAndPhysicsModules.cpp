@@ -20,8 +20,12 @@ namespace
 
 void clearCompatibilityServerSubSystems()
 {
+    providePhysicsQuery(defaultEngineHost(), nullptr);
+    providePhysics(defaultEngineHost(), nullptr);
+
     auto& loop = ayt::game::IGameLoop::instance();
     loop.unregisterSubSystem("Script");
+    loop.unregisterSubSystem("EntityPhysicsBridge");
     loop.unregisterSubSystem("Physics");
     loop.unregisterSubSystem("Entity");
 }
