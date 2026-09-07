@@ -1,6 +1,7 @@
 #include <AYApplication/EngineRuntimeScope.h>
 
 #include <AYApplication/DeprecatedSuppress.h>
+#include <AYApplication/GameProject.h>
 #include <AYApplication/IEngineHost.h>
 #include <AYEntity/World.h>
 #include <AYScene/SceneManager.h>
@@ -16,13 +17,14 @@ namespace ayt::app
 namespace
 {
 
-constexpr std::array<std::string_view, 6> kBuiltinServiceKeys{
+constexpr std::array<std::string_view, 7> kBuiltinServiceKeys{
     kHostServiceResources,
     kHostServicePhysics,
     kHostServicePhysicsQuery,
     kHostServiceAudio,
     kHostServiceScenes,
     kHostServiceRuntimeSceneLoader,
+    kHostServiceGameWorldRouter,
 };
 
 } // namespace

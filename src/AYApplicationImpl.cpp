@@ -27,6 +27,7 @@
 #endif
 
 #include <AYEventSystem/EventBus.h>
+#include <AYEventSystem/Events/WindowEvents.h>
 #include <AYEventSystem/SubscriptionScope.h>
 
 #include <cstdio>
@@ -271,6 +272,10 @@ public:
 
         onInit();
         registerSubSystems();
+        _events.subscribe<ayt::event::WindowCloseEvent>(
+            [&loop](const ayt::event::WindowCloseEvent&) {
+                loop.stop();
+            });
         loop.run();
 
         onPreShutdown();

@@ -153,6 +153,25 @@ if(MSVC)
 endif()
 ay_add_test(EngineRuntimeScopeTest)
 
+add_executable(GameProjectTest
+    TestMain.cpp
+    Test_GameProject.cpp
+)
+target_link_libraries(GameProjectTest PRIVATE
+    AYApplication
+    AYTest
+)
+target_compile_options(GameProjectTest PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+if(MSVC)
+    target_link_options(GameProjectTest PRIVATE
+        "/FORCE:MULTIPLE"
+        "/IGNORE:4005"
+        "/IGNORE:4006")
+endif()
+ay_add_test(GameProjectTest)
+
 # -----------------------------------------------------------------------------
 # EngineModuleRuntimeTest - isolated AYModule/Host adapter tests. This target
 # deliberately uses test-only modules and does not invoke default engine module

@@ -7,4 +7,5 @@
 #include <AYApplication/IEngineHost.h>
 #include <AYApplication/RegisterDefaultModules.h>
 #include <AYApplication/RuntimeSceneLoader.h>
+#include <AYApplication/GameProject.h>
 #include <AYApplication/RuntimeSceneLoaderModule.h>

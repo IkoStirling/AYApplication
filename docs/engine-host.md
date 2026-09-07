@@ -45,8 +45,9 @@ scope 恢复进入本次运行前的 Host 服务、任务 hook、Scene 选择与
 | 11 | `AYScript.Runtime`（可选） | Logia；依赖 Script integration |
 | 12 | `AYAudio.Runtime`（可选） | `-no-audio` 则跳过 |
 | 13 | `AYApplication.RuntimeSceneLoader`（可选） | Egress 帧边界场景加载；初始化时创建或加载 Client Play Scene，并切换活动 World |
-| 14 | `GameDesc::configureModules`（可选） | 项目在依赖解析前追加 Video/Online 等节点 |
-| 15 | `EngineRuntimeScope::refresh` | 写入 Host 服务表（含 RuntimeSceneLoader）；安装 Scene→EventBus 观察者；安装 AYTask→`TaskCompleteEvent` hook；退出时成组恢复 |
+| 14 | `AYApplication.GameWorldRouter`（`GameProject` 客户端） | 用稳定 World ID 驱动 RuntimeSceneLoader，在 Egress 边界切换 Scene/World |
+| 15 | `GameDesc::configureModules`（可选） | 项目在依赖解析前追加游戏、Video/Online 等节点 |
+| 16 | `EngineRuntimeScope::refresh` | 写入 Host 服务表（含 RuntimeSceneLoader / GameWorldRouter）；安装 Scene→EventBus 观察者；安装 AYTask→`TaskCompleteEvent` hook；退出时成组恢复 |
 
 ### 2.1.1 引擎事件生产者（Host 装配后）
 
@@ -214,6 +215,7 @@ ayt::app::providePhysics(host, mgr);
 | `kHostServiceAudio` | `ayt.audio.AudioEngine` | `AudioEngine*` | bind 时若已 init；否则 `audio()` 惰性查 SubSystem | 无 Audio 模块或尚未 initialize |
 | `kHostServiceScenes` | `ayt.scene.SceneManager` | `SceneManager*` | `bindBuiltinHostServices`（PR-6 v0.1.3，Meyers singleton）；`scenes()` 另有 instance 回退 | 几乎不应为空（单例） |
 | `kHostServiceRuntimeSceneLoader` | `ayt.app.RuntimeSceneLoader` | `IRuntimeSceneLoader*` | `AYApplication.RuntimeSceneLoader` 安装，`bindBuiltinHostServices` 发布 | Client 禁用或未安装 RuntimeSceneLoader |
+| `kHostServiceGameWorldRouter` | `ayt.app.GameWorldRouter` | `IGameWorldRouter*` | `runGameProject` 添加的 `AYApplication.GameWorldRouter` | Server、非 GameProject 应用或尚未初始化 |
 | `kHostServiceOnlineFlow` | `ayt.net.OnlineFlowCoordinator` | `OnlineFlowCoordinator*` | `AYOnlineApplication.Runtime` 初始化 | 未选择 Online 栈或尚未初始化 |
 | `kHostServiceOnlineApplication` | `ayt.app.online.OnlineApplication` | `IOnlineApplicationSubSystem*` | `AYOnlineApplication.Runtime` 初始化 | 未选择 Online 栈或尚未初始化 |
 

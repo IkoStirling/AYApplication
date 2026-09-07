@@ -13,6 +13,7 @@ set(SOURCES
     src/AYEngineHost.cpp
     src/AYEngineHostScope.cpp
     src/AYEngineRuntimeScope.cpp
+    src/AYGameProject.cpp
     src/AYRegisterDefaultModules.cpp
     src/AYRuntimeSceneLoader.cpp
     src/AYRuntimeSceneLoaderModule.cpp
@@ -26,6 +27,7 @@ set(HEADERS
     interface/AYApplication/EngineModuleRuntime.h
     interface/AYApplication/IEngineHost.h
     interface/AYApplication/EngineRuntimeScope.h
+    interface/AYApplication/GameProject.h
     interface/AYApplication/IHostPluginHooks.h
     interface/AYApplication/RegisterDefaultModules.h
     interface/AYApplication/RuntimeSceneLoader.h

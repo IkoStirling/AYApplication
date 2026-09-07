@@ -1,5 +1,6 @@
 #include <AYApplication/DeprecatedSuppress.h>
 #include <AYApplication/EngineRuntimeScope.h>
+#include <AYApplication/GameProject.h>
 #include <AYApplication/IEngineHost.h>
 #include <AYEntity/World.h>
 #include <AYEventSystem/EventBus.h>
@@ -76,7 +77,7 @@ TEST_CASE(restores_services_hooks_scene_and_active_world_as_one_scope)
     using namespace ayt::app;
 
     ScopeHost host;
-    int sentinels[6]{};
+    int sentinels[7]{};
     const char* keys[] = {
         kHostServiceResources,
         kHostServicePhysics,
@@ -84,8 +85,9 @@ TEST_CASE(restores_services_hooks_scene_and_active_world_as_one_scope)
         kHostServiceAudio,
         kHostServiceScenes,
         kHostServiceRuntimeSceneLoader,
+        kHostServiceGameWorldRouter,
     };
-    for (std::size_t i = 0; i < 6; ++i) {
+    for (std::size_t i = 0; i < 7; ++i) {
         host.provideService(keys[i], &sentinels[i]);
     }
 
@@ -122,7 +124,7 @@ TEST_CASE(restores_services_hooks_scene_and_active_world_as_one_scope)
         CHECK(ayt::entity::World::activeWorld() == &runtime.world());
     }
 
-    for (std::size_t i = 0; i < 6; ++i) {
+    for (std::size_t i = 0; i < 7; ++i) {
         CHECK(host.findService(keys[i]) == &sentinels[i]);
     }
     CHECK(scenes.lifecycleObserver() == &observer);
