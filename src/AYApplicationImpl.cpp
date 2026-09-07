@@ -26,7 +26,7 @@
 #endif
 
 #include <AYEventSystem/EventBus.h>
-#include <AYApplication/AppEventHost.h>
+#include <AYEventSystem/SubscriptionScope.h>
 
 #include <cstdio>
 #include <memory>
@@ -320,7 +320,7 @@ private:
     // Host-owned EventBus subscriptions (Phase 4 §a8c8be9 lesson).
     // Connect listeners here instead of holding raw ScopedConnection
     // members so that disconnect() in run() releases them all in one place.
-    ayt::app::EventBusHostScope _events;
+    ayt::event::SubscriptionScope _events;
 };
 
 std::unique_ptr<IApplication> IApplication::create(const GameDesc& desc)

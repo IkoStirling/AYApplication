@@ -149,7 +149,7 @@ public:
     // Host EventBus accessor. Returns the process-wide singleton
     // (ayt::event::EventBus::instance()) — used to subscribe / emit / pump
     // from outside the ApplicationImpl. Cleanup of host-scoped subscriptions
-    // is the host's responsibility (use ayt::app::EventBusHostScope, or pair
+    // is the host's responsibility (use ayt::event::SubscriptionScope, or pair
     // ScopedConnection with your own lifetime; do NOT call
     // EventBus::unsubscribeAll() during shutdown — Phase 4 lesson).
     virtual ayt::event::EventBus& eventBus() = 0;
