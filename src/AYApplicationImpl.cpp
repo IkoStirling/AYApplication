@@ -8,12 +8,22 @@
 #include <AYApplication/IEngineHost.h>
 #include <AYApplication/RuntimeSceneLoader.h>
 
-#include <AYDevice/DeviceSubSystem.h>
-#include <AYDevice/DeviceInputProvider.h>
-#include <AYEntity/EntityModule.h>
 #include <AYScene/SceneManager.h>
-#include <AYScript/ScriptSubSystem.h>
 #include <AYGameLoop/SubSystemRegistry.h>
+#include <AYEntity/ComponentRegistry.h>
+
+#if AY_APPLICATION_HAS_DEVICE && AY_APPLICATION_HAS_SCRIPT
+#include <AYDevice/DeviceInputProvider.h>
+#include <AYDevice/DeviceSubSystem.h>
+#include <AYScript/ScriptSubSystem.h>
+#endif
+#if AY_APPLICATION_HAS_PRESENTATION
+#include <AYEntity/EntityAnimationIntegrationModule.h>
+#include <AYEntity/EntityRenderIntegrationModule.h>
+#endif
+#if AY_APPLICATION_HAS_2D
+#include <AYEntity/Entity2DIntegrationModule.h>
+#endif
 
 #include <AYEventSystem/EventBus.h>
 #include <AYApplication/AppEventHost.h>
@@ -110,6 +120,13 @@ class ApplicationImpl : public IApplication {
 public:
     explicit ApplicationImpl(const GameDesc& desc) : _desc(desc) {}
 
+    ~ApplicationImpl() override
+    {
+        if (_moduleRuntime) {
+            _moduleRuntime->shutdown();
+        }
+    }
+
     explicit ApplicationImpl(const GameDesc& desc, const AppCommandLine& cmdLine)
         : _desc(desc), _cmdLine(cmdLine)
     {
@@ -156,14 +173,26 @@ public:
 
     void registerSubSystems() override
     {
-        const bool enablePhysics = _desc.enablePhysics && !_cmdLine.noPhysics;
+        if (_moduleRuntime) {
+            return;
+        }
+
+        const bool enablePhysics = kApplicationHasPhysics
+            && _desc.enablePhysics && !_cmdLine.noPhysics;
 
         if (_desc.serverMode || _cmdLine.server) {
             // Engine-host §2.3 Server assembly.
             ServerModuleOptions opts;
-            opts.enableScript = true;
+            opts.enableScript = kApplicationHasScript;
             opts.enablePhysics = enablePhysics;
-            registerDefaultServerModules(opts);
+            auto runtime = std::make_unique<EngineModuleRuntime>(engineHost());
+            auto configured = configureDefaultServerModules(*runtime, opts);
+            if (configured && _desc.configureModules) {
+                configured = _desc.configureModules(*runtime);
+            }
+            installConfiguredRuntime(
+                std::move(runtime),
+                std::move(configured));
             bindBuiltinHostServices(engineHost());
             return;
         }
@@ -174,37 +203,43 @@ public:
         opts.windowTitle = _desc.name;
         opts.windowWidth = static_cast<int>(_desc.width);
         opts.windowHeight = static_cast<int>(_desc.height);
-        opts.enableAudio = !_cmdLine.noAudio;
+        opts.enableAudio = kApplicationHasAudio && !_cmdLine.noAudio;
         opts.enablePresentation = _desc.enablePresentation;
+        opts.enableScript = kApplicationHasScript;
         opts.enablePhysics = enablePhysics;
-        registerDefaultClientModules(opts);
-        bindBuiltinHostServices(engineHost());
-
-        if (auto* scenes = engineHost().scenes()) {
-            RuntimeSceneLoaderConfig sceneConfig;
-            sceneConfig.initialSceneName =
-                _desc.name ? _desc.name : "Client";
-            if (_desc.scenePath != nullptr) {
-                sceneConfig.initialScenePath = _desc.scenePath;
-            }
-            if (_desc.enablePresentation) {
-                sceneConfig.onSceneActivated = [](::ayt::scene::Scene&) {
+        opts.runtimeSceneLoaderConfig.initialSceneName =
+            _desc.name ? _desc.name : "Client";
+        if (_desc.scenePath != nullptr) {
+            opts.runtimeSceneLoaderConfig.initialScenePath = _desc.scenePath;
+        }
+#if AY_APPLICATION_HAS_PRESENTATION
+        if (_desc.enablePresentation) {
+            opts.runtimeSceneLoaderConfig.onSceneActivated =
+                [](::ayt::scene::Scene&) {
                     // Systems resolving World::instance() must bind after the
                     // new Play Scene has become SceneManager::current().
-                    ayt::entity::bootstrapModule();
+                    ayt::entity::registerEntityAnimationSystems();
+                    ayt::entity::registerEntityRenderSystems();
+#if AY_APPLICATION_HAS_2D
+                    ayt::entity::registerEntity2DSystems();
+#endif
                 };
-            }
-            if (registerRuntimeSceneLoader(
-                    *scenes, std::move(sceneConfig), &eventBus())) {
-                engineHost().provide(
-                    kHostServiceRuntimeSceneLoader,
-                    findRegisteredRuntimeSceneLoader());
-            }
         }
+#endif
+        auto runtime = std::make_unique<EngineModuleRuntime>(engineHost());
+        auto configured = configureDefaultClientModules(*runtime, opts);
+        if (configured && _desc.configureModules) {
+            configured = _desc.configureModules(*runtime);
+        }
+        installConfiguredRuntime(
+            std::move(runtime),
+            std::move(configured));
+        bindBuiltinHostServices(engineHost());
 
         // INT-02: Script ← DeviceInputProvider. Lifetime: static provider
         // points at DeviceSubSystem's manager; ScriptSubSystem::shutdown
         // clears the provider before Device is destroyed.
+#if AY_APPLICATION_HAS_DEVICE && AY_APPLICATION_HAS_SCRIPT
         if (auto* devSub = ayt::device::DeviceSubSystem::findRegistered()) {
             auto* sub = engineHost().findSubSystem("ayt.script.runtime");
             if (auto* scriptSub =
@@ -214,6 +249,7 @@ public:
                 scriptSub->bridge().setInputProvider(&s_provider);
             }
         }
+#endif
     }
 
     void run() override
@@ -230,6 +266,10 @@ public:
 
         onPreShutdown();
         loop.shutdown();
+        if (_moduleRuntime) {
+            _moduleRuntime->shutdown();
+            _moduleRuntime.reset();
+        }
         engineHost().provide<IRuntimeSceneLoader>(
             kHostServiceRuntimeSceneLoader, nullptr);
         // Phase 4 (a8c8be9) lesson applied: the host application, not
@@ -252,8 +292,30 @@ public:
     }
 
 private:
+    void installConfiguredRuntime(
+        std::unique_ptr<EngineModuleRuntime> runtime,
+        ayt::module::ModuleResult configured)
+    {
+        auto require = [](const ayt::module::ModuleResult& result,
+                          const char* phase) {
+            if (!result) {
+                throw AppException(
+                    AppException::Code::SubSystemInitFailed,
+                    std::string("Engine module ") + phase + " failed: " +
+                        result.message());
+            }
+        };
+
+        require(configured, "configuration");
+        require(runtime->prepare(), "type registration");
+        runtime->context().componentRegistry().seal();
+        require(runtime->install(), "installation");
+        _moduleRuntime = std::move(runtime);
+    }
+
     GameDesc       _desc;
     AppCommandLine _cmdLine;
+    std::unique_ptr<EngineModuleRuntime> _moduleRuntime;
 
     // Host-owned EventBus subscriptions (Phase 4 §a8c8be9 lesson).
     // Connect listeners here instead of holding raw ScopedConnection

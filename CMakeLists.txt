@@ -14,6 +14,7 @@ set(SOURCES
     src/AYEngineHostScope.cpp
     src/AYRegisterDefaultModules.cpp
     src/AYRuntimeSceneLoader.cpp
+    src/AYRuntimeSceneLoaderModule.cpp
     src/AYSceneLifecycleEventBridge.cpp
 )
 
@@ -26,8 +27,9 @@ set(HEADERS
     interface/AYApplication/IHostPluginHooks.h
     interface/AYApplication/RegisterDefaultModules.h
     interface/AYApplication/RuntimeSceneLoader.h
-    
+
     include/AYApplication/SceneLifecycleEventBridge.h
+    include/AYApplication/RuntimeSceneLoaderModule.h
 )
 
 add_library(${PROJECT_NAME} STATIC ${SOURCES} ${HEADERS})
@@ -38,35 +40,75 @@ target_include_directories(${PROJECT_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/interface
 )
 
-target_link_libraries(${PROJECT_NAME} PUBLIC
-    AYCore
-    AYGameLoop
-    AY::Module
-    # AYAudio and AYDeviceSubSystem are linked PRIVATE so their libs (and their
-    # own PRIVATE win32 deps) do not leak onto the link line of consumers
-    # (AYEditor, AYEditorShell_Demo, AYEditorShutdownRepro). ApplicationImpl is
-    # the only TU that references AudioSubSystem / DeviceSubSystem.
-    # INT-01 (2026-07-15): AYScript is linked PRIVATE because ApplicationImpl
-    # is the only TU that references ScriptSubSystem. AYScript transitively
-    # pulls AYEntity/AYReflect, so this effectively re-uses those libs without
-    # leaking the Logia DSL / ScriptComponent API onto consumer link lines.
-    PRIVATE AYAudio
-    PRIVATE AYDeviceSubSystem
-    PRIVATE AYScript
-    PRIVATE AYResource
-    PRIVATE AYTask
-    # PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家 facade.
-    # DEFAULT-ENGINE-HOST-INSIDE-ONLY: bindBuiltinHostServices 注册 SceneManager，
-    # 但 AYScene 不暴露给 AYApplication 下游（AYEditor / AYEditorShell_Demo /
-    # AYEditorShutdownRepro）的 link line —— 与 PRIVATE AYResource 模式一致。
-    PRIVATE AYScene
-    # P0 Client presentation option: RendererSubSystem registration.
-    PRIVATE AYRenderer
-    # Server/Client physics assembly (PhysicsSubSystem : ISubSystem).
-    PRIVATE AYPhysics
-    # Entity comes via AYScript (bootstrapEntityCore). EventBus via GameLoop.
-    # AYResource: DefaultEngineHost::resources() / bindBuiltinHostServices.
-    # AYScene: DefaultEngineHost::scenes() / bindBuiltinHostServices (PR-6 v0.1.3).
+set(AY_APPLICATION_HAS_AUDIO 0)
+set(AY_APPLICATION_HAS_DEVICE 0)
+set(AY_APPLICATION_HAS_PRESENTATION 0)
+set(AY_APPLICATION_HAS_2D 0)
+set(AY_APPLICATION_HAS_PHYSICS 0)
+set(AY_APPLICATION_HAS_SCRIPT 0)
+set(AY_APPLICATION_HAS_NETWORK 0)
+
+set(_ay_application_private_libraries
+    AYEntityCore
+    AYResource
+    AYTask
+    AYScene
+)
+
+if(TARGET AYAudio)
+    set(AY_APPLICATION_HAS_AUDIO 1)
+    list(APPEND _ay_application_private_libraries AYAudio)
+endif()
+if(TARGET AYDeviceSubSystem)
+    set(AY_APPLICATION_HAS_DEVICE 1)
+    list(APPEND _ay_application_private_libraries AYDeviceSubSystem)
+endif()
+if(TARGET AYRenderer AND
+   TARGET AYEntityAnimationIntegration AND
+   TARGET AYEntityRenderIntegration)
+    set(AY_APPLICATION_HAS_PRESENTATION 1)
+    list(APPEND _ay_application_private_libraries
+        AYRenderer
+        AYEntityAnimationIntegration
+        AYEntityRenderIntegration)
+endif()
+if(TARGET AYEntity2DIntegration)
+    set(AY_APPLICATION_HAS_2D 1)
+    list(APPEND _ay_application_private_libraries AYEntity2DIntegration)
+endif()
+if(TARGET AYPhysics AND TARGET AYEntityPhysicsIntegration)
+    set(AY_APPLICATION_HAS_PHYSICS 1)
+    list(APPEND _ay_application_private_libraries
+        AYPhysics
+        AYEntityPhysicsIntegration)
+endif()
+if(TARGET AYScript AND TARGET AYEntityScriptIntegration)
+    set(AY_APPLICATION_HAS_SCRIPT 1)
+    list(APPEND _ay_application_private_libraries
+        AYScript
+        AYEntityScriptIntegration)
+endif()
+if(TARGET AYNetwork)
+    set(AY_APPLICATION_HAS_NETWORK 1)
+endif()
+
+target_link_libraries(${PROJECT_NAME}
+    PUBLIC
+        AYCore
+        AYGameLoop
+        AY::Module
+    PRIVATE
+        ${_ay_application_private_libraries}
+)
+
+target_compile_definitions(${PROJECT_NAME} PUBLIC
+    AY_APPLICATION_HAS_AUDIO=${AY_APPLICATION_HAS_AUDIO}
+    AY_APPLICATION_HAS_DEVICE=${AY_APPLICATION_HAS_DEVICE}
+    AY_APPLICATION_HAS_PRESENTATION=${AY_APPLICATION_HAS_PRESENTATION}
+    AY_APPLICATION_HAS_2D=${AY_APPLICATION_HAS_2D}
+    AY_APPLICATION_HAS_PHYSICS=${AY_APPLICATION_HAS_PHYSICS}
+    AY_APPLICATION_HAS_SCRIPT=${AY_APPLICATION_HAS_SCRIPT}
+    AY_APPLICATION_HAS_NETWORK=${AY_APPLICATION_HAS_NETWORK}
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE
@@ -74,9 +116,33 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )
 
+# A final-link and startup proof for the minimal build graph. Unlike building
+# the AYApplication static library alone, this catches accidental references
+# to a disabled runtime library. The target only exists when every optional
+# application capability is absent.
+if(NOT AY_APPLICATION_HAS_AUDIO AND
+   NOT AY_APPLICATION_HAS_DEVICE AND
+   NOT AY_APPLICATION_HAS_PRESENTATION AND
+   NOT AY_APPLICATION_HAS_2D AND
+   NOT AY_APPLICATION_HAS_PHYSICS AND
+   NOT AY_APPLICATION_HAS_SCRIPT AND
+   NOT AY_APPLICATION_HAS_NETWORK)
+    add_executable(AYApplication_HeadlessSmoke
+        tools/headless_smoke/main.cpp
+    )
+    target_link_libraries(AYApplication_HeadlessSmoke PRIVATE
+        AYApplication
+    )
+    target_compile_options(AYApplication_HeadlessSmoke PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+    )
+endif()
+
 # Shared content identity -> installed scene mapping. This deliberately stays
 # independent of the full AYApplication target so server-side code need not
 # depend on the client application bridge.
+if(TARGET AYNetwork)
 add_library(AYOnlineContent STATIC
     online/src/AYOnlineContent.cpp
     online/interface/AYOnlineApplication/OnlineContent.h
@@ -97,7 +163,9 @@ target_compile_options(AYOnlineContent PRIVATE
 # online backend dependencies.
 add_library(AYOnlineApplication STATIC
     online/src/AYOnlineApplication.cpp
+    online/src/AYOnlineApplicationRuntimeModule.cpp
     online/interface/AYOnlineApplication/OnlineApplication.h
+    online/interface/AYOnlineApplication/OnlineApplicationRuntimeModule.h
 )
 target_include_directories(AYOnlineApplication PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/online/interface
@@ -114,8 +182,8 @@ target_compile_options(AYOnlineApplication PRIVATE
 )
 
 # Server-side scene/world integration is separate from the client application
-# bridge. It runs headlessly; AYScene's current monolithic AYEntity dependency
-# can still place presentation static libraries on the final link line.
+# bridge. It runs headlessly and links only Entity core plus the explicit
+# Network integration layer.
 add_library(AYDedicatedApplication STATIC
     online/src/AYDedicatedApplication.cpp
     online/interface/AYOnlineApplication/DedicatedApplication.h
@@ -125,6 +193,7 @@ target_include_directories(AYDedicatedApplication PUBLIC
 )
 target_link_libraries(AYDedicatedApplication PUBLIC
     AYNetwork
+    AYEntityNetworkIntegration
     AYOnlineContent
     AYScene
 )
@@ -146,8 +215,11 @@ target_compile_options(AYApplication_DedicatedServer PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )
+endif()
 
-enable_testing()
-add_subdirectory(unittest)
+if(BUILD_TESTING)
+    enable_testing()
+    add_subdirectory(unittest)
+endif()
 
 message(STATUS "AYApplication v0.1.0 (EngineHost services + EventBusHostScope) — see ${CMAKE_CURRENT_SOURCE_DIR}/docs/engine-host.md")

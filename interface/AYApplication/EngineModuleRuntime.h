@@ -6,13 +6,16 @@
 namespace ayt::app
 {
 
-// Host-side owner for one startup module graph. Existing default module
-// registration does not use this object yet; application/editor composition
-// roots opt in explicitly as modules are migrated.
+// Host-side owner for one startup module graph. ApplicationImpl and EditorApp
+// use this object for the migrated default runtime modules; compatibility and
+// not-yet-migrated host wiring may still run alongside the graph.
 class EngineModuleRuntime
 {
 public:
     explicit EngineModuleRuntime(IEngineHost& host) noexcept;
+    EngineModuleRuntime(
+        IEngineHost& host,
+        ayt::entity::ComponentRegistry& componentRegistry) noexcept;
 
     EngineModuleRuntime(const EngineModuleRuntime&) = delete;
     EngineModuleRuntime& operator=(const EngineModuleRuntime&) = delete;

@@ -8,6 +8,13 @@ EngineModuleRuntime::EngineModuleRuntime(IEngineHost& host) noexcept
 {
 }
 
+EngineModuleRuntime::EngineModuleRuntime(
+    IEngineHost& host,
+    ayt::entity::ComponentRegistry& componentRegistry) noexcept
+    : _context(host, componentRegistry)
+{
+}
+
 ayt::module::ModuleManager& EngineModuleRuntime::modules() noexcept
 {
     return _modules;

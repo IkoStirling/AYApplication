@@ -1,14 +1,12 @@
 #include <AYApplication/IEngineHost.h>
 
-#include <AYAudio/AudioSubSystem.h>
 #include <AYGameLoop.h>
-#include <AYPhysics/PhysicsSubSystem.h>
 #include <AYResource/ResourceManager.h>
 #include <AYApplication/SceneLifecycleEventBridge.h>
+#include <AYApplication/RuntimeSceneLoader.h>
 #include <AYScene/SceneManager.h>  // PR-6 (v0.1.3): scenes() facade
 #include <AYGameLoop/SubSystemRegistry.h>
 #include <AYApplication/DeprecatedSuppress.h>  // v0.3 PR-4 (AYScene): instance() [[deprecated]] 豁免
-#include <AYPhysics/IPhysicsQuery.h>
 #include <AYEventSystem/EventBus.h>
 #include <AYEventSystem/Events/TaskEvents.h>
 #include <AYTask/TaskCompletionHook.h>
@@ -18,6 +16,14 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#if AY_APPLICATION_HAS_AUDIO
+#include <AYAudio/AudioSubSystem.h>
+#endif
+#if AY_APPLICATION_HAS_PHYSICS
+#include <AYPhysics/IPhysicsQuery.h>
+#include <AYPhysics/PhysicsSubSystem.h>
+#endif
 
 namespace ayt::app
 {
@@ -88,9 +94,11 @@ public:
                 findService(kHostServicePhysics))) {
             return p;
         }
+#if AY_APPLICATION_HAS_PHYSICS
         if (auto* physSub = ayt::physics::PhysicsSubSystem::findRegistered()) {
             return physSub->manager();
         }
+#endif
         return nullptr;
     }
 
@@ -100,9 +108,11 @@ public:
                 findService(kHostServicePhysicsQuery))) {
             return p;
         }
+#if AY_APPLICATION_HAS_PHYSICS
         if (auto* physSub = ayt::physics::PhysicsSubSystem::findRegistered()) {
             return physSub->query();
         }
+#endif
         return nullptr;
     }
 
@@ -112,10 +122,12 @@ public:
                 findService(kHostServiceAudio))) {
             return p;
         }
+#if AY_APPLICATION_HAS_AUDIO
         auto* sub = findSubSystem("Audio");
         if (auto* audioSub = dynamic_cast<ayt::audio::AudioSubSystem*>(sub)) {
             return audioSub->engine();
         }
+#endif
         return nullptr;
     }
 
@@ -209,14 +221,19 @@ void bindBuiltinHostServices(IEngineHost& host)
 {
     host.provide(kHostServiceResources, &ayt::resource::ResourceManager::instance());
 
+#if AY_APPLICATION_HAS_AUDIO
     if (auto* sub = dynamic_cast<ayt::audio::AudioSubSystem*>(host.findSubSystem("Audio"))) {
         if (auto* eng = sub->engine()) {
             host.provide(kHostServiceAudio, eng);
         }
     }
+#endif
     AY_DEPRECATED_SUPPRESS_BEGIN
     host.provide(kHostServiceScenes, &ayt::scene::SceneManager::instance());
     AY_DEPRECATED_SUPPRESS_END
+    host.provide(
+        kHostServiceRuntimeSceneLoader,
+        findRegisteredRuntimeSceneLoader());
 
     // Scene lifecycle → EventBus (Host bridge; AYScene stays EventSystem-free).
     if (auto* sm = host.scenes()) {
@@ -226,6 +243,7 @@ void bindBuiltinHostServices(IEngineHost& host)
     // AYTask completion → EventBus (Task stays EventSystem-free via hook).
     ayt::task::setTaskCompletionHook(&postTaskCompleteToEventBus);
 
+#if AY_APPLICATION_HAS_PHYSICS
     if (auto* physSub = ayt::physics::PhysicsSubSystem::findRegistered()) {
         if (auto* mgr = physSub->manager()) {
             providePhysics(host, mgr);
@@ -234,6 +252,7 @@ void bindBuiltinHostServices(IEngineHost& host)
             providePhysicsQuery(host, query);
         }
     }
+#endif
 }
 
 void providePhysics(IEngineHost& host, ayt::physics::PhysicsManager* manager)

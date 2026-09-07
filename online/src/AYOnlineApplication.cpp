@@ -467,8 +467,11 @@ namespace
 class OnlineApplicationSubSystem final : public IOnlineApplicationSubSystem {
 public:
     OnlineApplicationSubSystem(::ayt::app::IEngineHost& host,
+                               ::ayt::net::IOnlineFlowSubSystem& flowSubSystem,
                                OnlineSceneBridgeConfig config)
-        : _host(host), _config(std::move(config)) {}
+        : _host(host),
+          _flowSubSystem(flowSubSystem),
+          _config(std::move(config)) {}
 
     const char* getName() const override { return "OnlineApplication"; }
 
@@ -491,12 +494,11 @@ public:
 
     bool initialize() override {
         if (_bridge) return true;
-        auto* flowSubSystem = ::ayt::net::findRegisteredOnlineFlowSubSystem();
         auto* loader = _host.service<::ayt::app::IRuntimeSceneLoader>(
             ::ayt::app::kHostServiceRuntimeSceneLoader);
-        if (!flowSubSystem || !flowSubSystem->isReady() ||
-            !flowSubSystem->coordinator() || !loader) return false;
-        _flow = flowSubSystem->coordinator();
+        if (!_flowSubSystem.isReady() ||
+            !_flowSubSystem.coordinator() || !loader) return false;
+        _flow = _flowSubSystem.coordinator();
         _bridge = std::make_unique<OnlineSceneBridge>(
             *_flow, *loader, _config, _host.eventBus());
         if (!_bridge->initialize()) {
@@ -544,12 +546,22 @@ public:
 
 private:
     ::ayt::app::IEngineHost& _host;
+    ::ayt::net::IOnlineFlowSubSystem& _flowSubSystem;
     OnlineSceneBridgeConfig _config;
     ::ayt::net::OnlineFlowCoordinator* _flow = nullptr;
     std::unique_ptr<OnlineSceneBridge> _bridge;
 };
 
 } // namespace
+
+std::unique_ptr<IOnlineApplicationSubSystem>
+createOnlineApplicationSubSystem(
+    ::ayt::app::IEngineHost& host,
+    ::ayt::net::IOnlineFlowSubSystem& flow,
+    OnlineSceneBridgeConfig config) {
+    return std::make_unique<OnlineApplicationSubSystem>(
+        host, flow, std::move(config));
+}
 
 IOnlineApplicationSubSystem* findRegisteredOnlineApplicationSubSystem() {
     auto* system = ::ayt::game::SubSystemRegistry::instance().findSubSystem(
@@ -571,8 +583,10 @@ bool registerOnlineApplication(
             config.flow, &host.eventBus())) {
         return false;
     }
-    auto system = std::make_unique<OnlineApplicationSubSystem>(
-        host, std::move(config.scenes));
+    auto* flow = ::ayt::net::findRegisteredOnlineFlowSubSystem();
+    if (!flow) return false;
+    auto system = createOnlineApplicationSubSystem(
+        host, *flow, std::move(config.scenes));
     ::ayt::game::IGameLoop::instance().registerSubSystem(system.release());
     return findRegisteredOnlineApplicationSubSystem() != nullptr;
 }

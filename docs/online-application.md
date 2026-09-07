@@ -77,9 +77,10 @@ systems, or choose another explicit per-process world limit.
 The reusable code is split into `AYOnlineContent` (trusted content mapping),
 `AYOnlineApplication` (client scene bridge), and `AYDedicatedApplication`
 (headless authority bridge). The Dedicated process does not register client
-presentation subsystems. `AYScene` still reaches the monolithic `AYEntity`
-target, so presentation static libraries can remain on the link command until
-AYEntity core and render systems are split into separate targets.
+presentation subsystems. `AYScene` now links `AYEntityCore`; the Dedicated
+target adds only `AYEntityNetworkIntegration`, so Renderer, Animation, Audio,
+Device, Physics and Script libraries are absent unless the product explicitly
+selects them.
 
 `AYApplication_DedicatedServer` is the deployable generic entry point. Its
 catalog is a trusted local tab-separated file:
@@ -106,14 +107,16 @@ its script, physics, replication, and authority systems in `prepareWorld`.
 
 ## Registration
 
-Register the optional assembly from `IApplication::onInit()`. The normal client
-module registration happens later; GameLoop lifecycle dependencies still
-initialize `RuntimeSceneLoader` before `OnlineApplication`.
+Add the optional stack through `GameDesc::configureModules`. The callback runs
+after the default Client graph has contributed `RuntimeSceneLoader`, but before
+module dependency resolution and type registration. Ordinary clients therefore
+do not acquire AYNetwork or online backend startup work.
 
 ```cpp
-#include <AYOnlineApplication/OnlineApplication.h>
+#include <AYApplication.h>
+#include <AYOnlineApplication/OnlineApplicationRuntimeModule.h>
 
-void GameApplication::onInit()
+ayt::app::GameDesc makeGameDesc()
 {
     using namespace ayt::app::online;
 
@@ -160,11 +163,21 @@ void GameApplication::onInit()
             (void)scene;
         };
 
-    if (!registerOnlineApplication(engineHost(), std::move(config))) {
-        throw std::runtime_error("online application registration failed");
-    }
+    ayt::app::GameDesc desc;
+    desc.name = "OnlineGame";
+    desc.enablePresentation = true;
+    desc.configureModules = [config = std::move(config)](
+        ayt::app::EngineModuleRuntime& runtime) {
+        return configureOnlineApplicationModules(runtime, config);
+    };
+    return desc;
 }
 ```
+
+`configureOnlineApplicationModules()` adds or adopts the stable chain
+`AYNetwork.Runtime -> AYNetwork.Online -> AYNetwork.OnlineFlow ->
+AYOnlineApplication.Runtime`. `registerOnlineApplication()` remains available
+for legacy direct-GameLoop composition and standalone demos.
 
 After GameLoop initialization, UI/game code can retrieve the application-facing
 flow without owning subsystem lifetimes:

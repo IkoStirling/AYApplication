@@ -107,9 +107,15 @@ public:
     virtual bool retryMainMenuScene() = 0;
 };
 
-// Register from IApplication::onInit(), before GameLoop startup. The normal
-// client module assembly registers RuntimeSceneLoader afterwards; lifecycle
-// dependencies ensure initialization still occurs in the correct order.
+// Creates an unregistered bridge subsystem. OnlineFlow must outlive it.
+std::unique_ptr<IOnlineApplicationSubSystem>
+createOnlineApplicationSubSystem(
+    ::ayt::app::IEngineHost& host,
+    ::ayt::net::IOnlineFlowSubSystem& flow,
+    OnlineSceneBridgeConfig config);
+
+// Legacy direct-registration path. New clients should add the optional module
+// stack through configureOnlineApplicationModules().
 bool registerOnlineApplication(
     ::ayt::app::IEngineHost& host,
     OnlineApplicationConfig config,

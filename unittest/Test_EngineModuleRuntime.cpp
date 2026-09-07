@@ -1,5 +1,6 @@
 #include <AYApplication/EngineModuleRuntime.h>
 #include <AYApplication/IEngineHost.h>
+#include <AYEntity/ComponentRegistry.h>
 #include <AYModule/IModule.h>
 #include <AYTest.h>
 
@@ -156,11 +157,29 @@ TEST_CASE(context_forwards_engine_host_services)
 
     EngineModuleContext context(host);
     CHECK(&context.host() == &host);
+    CHECK(context.findServiceAs<ayt::game::ISubSystemModuleService>(
+              ayt::game::kSubSystemModuleService)
+        == static_cast<ayt::game::ISubSystemModuleService*>(&context));
+    CHECK(context.findServiceAs<ayt::entity::ComponentRegistry>(
+              ayt::entity::kComponentRegistryModuleService)
+        == &ayt::entity::ComponentRegistry::instance());
     CHECK(context.findServiceAs<int>(kProbeService) == &probe);
     CHECK(context.findService("test.module.Missing") == nullptr);
 
     host.setThrowOnLookup(true);
     CHECK(context.findService(kProbeService) == nullptr);
+}
+
+TEST_CASE(runtime_can_inject_a_host_scoped_component_registry)
+{
+    FakeHost host;
+    ayt::entity::ComponentRegistry registry;
+    EngineModuleRuntime runtime(host, registry);
+
+    CHECK(&runtime.context().componentRegistry() == &registry);
+    CHECK(runtime.context().findServiceAs<ayt::entity::ComponentRegistry>(
+              ayt::entity::kComponentRegistryModuleService)
+        == &registry);
 }
 
 TEST_CASE(prepare_keeps_registry_seal_boundary_before_install)

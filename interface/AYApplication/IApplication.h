@@ -2,6 +2,9 @@
 // AYApplication/IApplication.h - 应用接口
 
 #include <AYCore.h>
+#include <AYModule/ModuleTypes.h>
+
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,6 +23,7 @@ namespace ayt::app
 {
 
 class IEngineHost;
+class EngineModuleRuntime;
 
 // =============================================================================
 // GameDesc - 应用描述符
@@ -43,6 +47,11 @@ struct GameDesc {
     bool enablePhysics = true;
     /// When true, ApplicationImpl uses registerDefaultServerModules (headless).
     bool serverMode = false;
+    /// Optional project-owned contribution to the startup module graph. The
+    /// callback runs after the selected default Client/Server graph is added
+    /// and before resolve/registerTypes/install.
+    std::function<ayt::module::ModuleResult(EngineModuleRuntime&)>
+        configureModules;
 };
 
 // =============================================================================

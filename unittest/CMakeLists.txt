@@ -152,6 +152,7 @@ target_include_directories(EngineModuleRuntimeTest PRIVATE
 target_link_libraries(EngineModuleRuntimeTest PRIVATE
     AY::Module
     AYGameLoop
+    AYEntity
     AYTest
 )
 
@@ -161,12 +162,35 @@ target_compile_options(EngineModuleRuntimeTest PRIVATE
 
 ay_add_test(EngineModuleRuntimeTest)
 
+# DefaultModuleAssemblyTest runs in its own process because it deliberately
+# seals the process-wide ComponentRegistry and validates registry cleanup.
+add_executable(DefaultModuleAssemblyTest
+    TestMain.cpp
+    Test_DefaultModuleAssembly.cpp
+)
+target_link_libraries(DefaultModuleAssemblyTest PRIVATE
+    AYApplication
+    AYEntity
+    AYTest
+)
+target_compile_options(DefaultModuleAssemblyTest PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+if(MSVC)
+    target_link_options(DefaultModuleAssemblyTest PRIVATE
+        "/FORCE:MULTIPLE"
+        "/IGNORE:4005"
+        "/IGNORE:4006")
+endif()
+ay_add_test(DefaultModuleAssemblyTest)
+
 # Optional AYApplication/AYNetwork bridge tests stay isolated from the core
 # AYApplicationTest target so ordinary application tests do not gain a network
 # link dependency.
 add_executable(OnlineApplicationTest
     TestMain.cpp
     Test_OnlineApplicationBridge.cpp
+    Test_OnlineApplicationRuntimeModule.cpp
 )
 target_link_libraries(OnlineApplicationTest PRIVATE
     AYOnlineApplication

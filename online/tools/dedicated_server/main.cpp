@@ -3,6 +3,7 @@
 #include <AYOnlineApplication/DedicatedApplication.h>
 
 #include <AYEntity/EntityModule.h>
+#include <AYEntity/EntityNetworkIntegrationModule.h>
 #include <AYNetwork/NetworkModule.h>
 #include <AYNetwork/Session/HttpOnlineServices.h>
 #include <AYScene.h>
@@ -102,7 +103,9 @@ int main(int argc, char** argv) {
     // registering Device, Audio, Renderer, or a presentation GameLoop in the
     // headless process. Game executables can replace this entry point and add
     // authority-only systems in DedicatedSceneHostConfig::prepareWorld.
-    ayt::entity::registerEntityComponents();
+    auto& componentRegistry = ayt::entity::ComponentRegistry::instance();
+    (void)ayt::entity::registerEntityCoreComponents(componentRegistry);
+    (void)ayt::entity::registerEntityNetworkComponents(componentRegistry);
 
     ayt::app::online::DedicatedSceneHostConfig worldConfig;
     worldConfig.contentResolver = catalog;

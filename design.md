@@ -59,7 +59,7 @@ AYApplication 是 AY Engine 的**应用入口层**，负责：
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 1.3 当前实现状态（2026-08-29）
+### 1.3 当前实现状态（2026-09-02）
 
 当前代码已经形成三条互相隔离的应用装配路径：
 
@@ -74,9 +74,9 @@ AYApplication 是 AY Engine 的**应用入口层**，负责：
 拥有；本模块不复制这些职责。
 
 Dedicated 运行时是 headless 的：不会注册窗口、Renderer、UI 或 Audio。
-但 `AYScene -> AYEntity` 当前仍经过单体 AYEntity 目标，最终链接命令仍可能包含
-表现层静态库。这是构建体积问题，不是运行时初始化问题，后续应拆分 AYEntity
-Core 与 Render Systems。
+`AYScene -> AYEntityCore` 不再经过完整 AYEntity facade；Application 仅在对应
+CMake target 存在时编译功能分支并链接具体 integration。`windows-headless-debug`
+提供最终可执行链接与启动冒烟目标来守住该边界。
 
 ---
 
@@ -1139,9 +1139,8 @@ cmake --build build-editor
 ## 14. AYModule 启动装配边界
 
 AYApplication 通过 `EngineModuleContext` 和 `EngineModuleRuntime` 接入独立
-AYModule，但当前默认 Client、Server、Editor 装配仍使用既有注册函数。
-AYEntity 的 `EntityComponentModule` 是第一个 opt-in 试点，只迁移组件类型
-注册阶段，不接管任何 GameLoop SubSystem。
+AYModule。默认 Client、Server 与 Editor composition root 已切换到模块图；
+旧 `registerDefault*Modules()` 函数只保留给兼容调用方。
 
 生命周期分为两个显式入口：
 
@@ -1153,14 +1152,42 @@ AYEntity 的 `EntityComponentModule` 是第一个 opt-in 试点，只迁移组�
 在自身及其服务仍然有效时显式调用 `shutdown()`。安装失败的逆序回滚由
 AYModule 负责；类型注册不提供通用回滚。
 
-当前非目标：
+当前已接入的模块节点为：
 
-- 不修改 `registerDefaultClientModules()` 和
-  `registerDefaultServerModules()`；
-- 不接管 GameLoop 的 `ISubSystem` 所有权；
-- 不实现动态插件加载、热卸载或 C ABI；
-- `ComponentRegistry` 由 AYEntity 实现并由 Host 在
-  `prepare() -> seal -> install()` 边界显式封存；AYApplication 不拥有它。
+- 类型阶段：`AYEntity.Components` 与按能力选择的
+  `AYEntity.*Integration`；
+- 第一阶段 SubSystem：`AYDevice.Runtime`、`AYEntity.Runtime`、
+  `AYRenderer.Runtime`、`AYPhysics.Runtime`、`AYScript.Runtime`、
+  `AYAudio.Runtime`；
+- 第二阶段桥接与 SubSystem：`AYEntity.PhysicsIntegration`、
+  `AYNetwork.Runtime`、
+  `AYApplication.RuntimeSceneLoader`。
+- 第三阶段可选扩展：`AYVideo.Runtime`、`AYNetwork.Online`、
+  `AYNetwork.OnlineFlow`、`AYOnlineApplication.Runtime`。
+
+`SubSystemModule` 通过 `EngineModuleContext` 发布到当前 GameLoop；GameLoop
+仍负责 `initialize/update/shutdown`，模块只负责启动期注册、重复实例收养和
+自己所注册实例的撤销。Client/Server/Editor 分别通过
+`configureDefaultClientModules()`、`configureDefaultServerModules()`、
+`configureDefaultEditorModules()` 选择模块集合。
+
+当前边界与后续项：
+
+- `ComponentRegistry` 仍由 AYEntity 实现，并由 Host 在
+  `prepare() -> seal -> install()` 边界显式封存；
+- `AYEntity.Runtime` 只安装 Core；Animation/Render/2D/Physics/Script/Network
+  组件与行为必须由对应 integration node 显式加入；
+- CMake feature 关闭时不会创建对应 Runtime/integration target，Application
+  使用同一组 build-capability 宏裁剪 include、代码分支和链接依赖；
+- Editor 自有 `DeviceManager` 不作为 GameLoop SubSystem；
+- 默认 Client/Server/Editor composition root 中的 GameLoop SubSystem 已全部由
+  模块图装配；
+- `GameDesc::configureModules` 在默认图完成后、依赖解析前接收项目模块；Video 和
+  Online 栈由项目显式选择，不污染普通 Client/Server/Editor 的链接面；
+- Scene/EventBus 观察者、Task 完成 hook、Editor 输入桥属于 Host adapter，
+  不作为 `IModule` 节点；
+- Video 与 Online 仍保留显式注册函数，供独立 Demo 和旧 composition root 兼容；
+- 动态插件加载、热卸载和 C ABI 不属于本阶段。
 
 ## 15. 参考
 

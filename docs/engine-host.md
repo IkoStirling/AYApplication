@@ -1,6 +1,6 @@
 # Engine Host — 装配与服务约定
 
-**Status:** Step 1（装配）+ **服务面**（`resources` / `physics` / `audio` / `scenes` + 可扩展键表）  
+**Status:** AYModule 默认装配 + **服务面**（`resources` / `physics` / `audio` / `scenes` + 可扩展键表）
 **Owner:** `AYApplication`  
 **Related:** [`../design.md`](../design.md) · [`../../AYGameLoop/docs/sim-present-time.md`](../../AYGameLoop/docs/sim-present-time.md) · [`../../AYScene/design.md`](../../AYScene/design.md)
 
@@ -13,7 +13,7 @@
 | 角色 | 模块 | 职责 |
 |------|------|------|
 | 产品入口 | `IApplication`（Client=`ApplicationImpl`，Editor=`EditorApp`） | 选壳、CLI、生命周期钩子 |
-| **引擎外壳** | `IEngineHost` + `registerDefault*Modules` | 装配顺序、当前 Host、**服务表** |
+| **引擎外壳** | `IEngineHost` + `EngineModuleRuntime` + `configureDefault*Modules` | 模块依赖、当前 Host、SubSystem 发布、**服务表** |
 | 帧循环 | `AYGameLoop` | `fixedUpdate` / `update`、暂停、帧率 |
 | 扩展（以后） | `AYPlugin` | 往 Host 扩展点填实现 |
 
@@ -21,20 +21,31 @@
 
 ## 2. 默认装配表（CR 用）
 
-关机大致**逆序**（GameLoop `shutdown` 清 SubSystem；Host scope 在 App `run` 结束时清空）。
+生产入口统一执行：`configure -> prepare -> ComponentRegistry::seal -> install`
+→ `bindBuiltinHostServices` → GameLoop 初始化。GameLoop 负责 SubSystem 的
+`initialize/update/shutdown`；`EngineModuleRuntime::shutdown()` 随后按模块逆序
+撤销仍存在的注册，Host scope 最后清空服务表。旧 `registerDefault*Modules()`
+保留为直接注册兼容 API，不再是 `ApplicationImpl` / `EditorApp` 的默认路径。
 
-### 2.1 Client（`registerDefaultClientModules`）
+### 2.1 Client（`configureDefaultClientModules`）
 
-| 顺序 | 步骤 | 说明 |
+| 顺序 | 模块 / 步骤 | 说明 |
 |------|------|------|
-| 1 | `DeviceSubSystem` | 窗口 + 输入 |
-| 2a | `bootstrapEntityCore()` | 默认：Entity 核心，不拉渲染 |
-| 2b | `registerEntityPresentationStack()` | `enablePresentation=true`：`bootstrapModule` + `RendererSubSystem` |
-| 3 | `ScriptSubSystem` | Logia |
-| 4 | `PhysicsSubSystem`（可选） | `enablePhysics` / `-no-physics`；`fixedUpdate` → `step`+`fetchResults` |
-| 5 | `AudioSubSystem`（可选） | `-no-audio` 则跳过 |
-| 6 | `bindBuiltinHostServices` | 写入 Host 服务表；安装 Scene→EventBus 观察者；安装 AYTask→`TaskCompleteEvent` hook |
-| 7 | Client Play Scene | `ApplicationImpl` 创建 `Scene(Play)`，可选 `-scene` / `GameDesc::scenePath` load，`setCurrent` → `World::instance()` 指向 Scene World |
+| 1 | `AYDevice.Runtime` | `DeviceSubSystem`，窗口 + 输入 |
+| 2 | `AYEntity.Components` | `registerTypes()` 阶段注册组件元数据 |
+| 3 | `AYEntity.Runtime` | Entity SubSystem 与 Core systems |
+| 4 | `AYRenderer.Runtime`（可选） | 仅 `enablePresentation=true` |
+| 5 | `AYEntity.AnimationIntegration`（可选） | Animation 组件与系统 |
+| 6 | `AYEntity.RenderIntegration`（可选） | Mesh/SkinnedMesh 表现系统；依赖 Renderer + Animation integration |
+| 7 | `AYEntity.2DIntegration`（可选） | Tilemap/Sprite/OrthoCamera 表现系统 |
+| 8 | `AYPhysics.Runtime`（可选） | `enablePhysics` / `-no-physics`；固定步物理 |
+| 9 | `AYEntity.PhysicsIntegration`（可选） | Physics 组件与 FixedPre/FixedPost ECS 桥 |
+| 10 | `AYEntity.ScriptIntegration`（可选） | ScriptComponent 类型注册 |
+| 11 | `AYScript.Runtime`（可选） | Logia；依赖 Script integration |
+| 12 | `AYAudio.Runtime`（可选） | `-no-audio` 则跳过 |
+| 13 | `AYApplication.RuntimeSceneLoader`（可选） | Egress 帧边界场景加载；初始化时创建或加载 Client Play Scene，并切换活动 World |
+| 14 | `GameDesc::configureModules`（可选） | 项目在依赖解析前追加 Video/Online 等节点 |
+| 15 | `bindBuiltinHostServices` | 写入 Host 服务表（含 RuntimeSceneLoader）；安装 Scene→EventBus 观察者；安装 AYTask→`TaskCompleteEvent` hook |
 
 ### 2.1.1 引擎事件生产者（Host 装配后）
 
@@ -48,27 +59,69 @@
 
 **World 权威（P0）：** `SceneManager::setCurrent` 调用 `World::setActiveWorld(&scene.world())`。`EntitySubSystem::update` 走 `World::instance()`，因此 **不要** 再对同一 World 调 `scenes()->tick(dt)`（会双 tick）。`scenes()->tick` 仅给 Preview / 显式旁路用。
 
-### 2.2 Editor（`registerDefaultEditorModules`）
+### 2.2 Editor（`configureDefaultEditorModules`）
 
-| 顺序 | 步骤 |
-|------|------|
-| 1 | `registerEntityPresentationStack()`（与 Client `enablePresentation` 共用） |
-| 2 | `registerPhysicsModule()` |
-| 3 | Network + Script |
-| 4 | `AudioSubSystem`（可选；`-no-audio` 则跳过；Miniaudio，供 Tools → Audio Editor） |
-| 5 | `bindBuiltinHostServices`（+ Editor 自有 Device 桥接仍在 App 内） |
-| 6 | Play：`beginPlay` 后再次 `bootstrapModule()`（系统落到 Play Scene World） |
-
-### 2.3 Server（`registerDefaultServerModules` / `-server`）
-
-| 顺序 | 步骤 | 说明 |
+| 顺序 | 模块 / 步骤 | 说明 |
 |------|------|------|
-| 1 | `bootstrapEntityCore()` | Entity 核心 |
-| 2 | `PhysicsSubSystem`（可选） | 默认开；`-no-physics` 关 |
-| 3 | `ScriptSubSystem`（可选） | `enableScript` |
-| 4 | `bindBuiltinHostServices` | 无 Device / Audio / Renderer |
+| 1 | `AYEntity.Components` | Entity 类型注册 |
+| 2 | `AYEditor.Components` | Editor 自有类型注册；依赖 `AYEntity.Components` |
+| 3 | `AYEntity.Runtime` | Entity SubSystem 与 Core systems |
+| 4 | `AYRenderer.Runtime` | Editor 合成渲染 |
+| 5 | `AYEntity.AnimationIntegration` | Animation 组件与系统 |
+| 6 | `AYEntity.RenderIntegration` | Mesh/SkinnedMesh 表现系统 |
+| 7 | `AYEntity.2DIntegration` | Tilemap/Sprite/OrthoCamera 表现系统 |
+| 8 | `AYPhysics.Runtime` + `AYEntity.PhysicsIntegration` | 编辑器 Play 物理与 ECS 桥 |
+| 9 | `AYEntity.ScriptIntegration` + `AYScript.Runtime` | ScriptComponent 与 Logia |
+| 10 | `AYEntity.NetworkIntegration` + `AYNetwork.Runtime` | NetworkComponent 与 Network SubSystem |
+| 11 | `AYAudio.Runtime`（可选） | `-no-audio` 跳过；供 Tools → Audio Editor |
+| 12 | Host 接线 | `bindBuiltinHostServices`；Editor 自有 `DeviceManager` 与 Script 输入桥仍由 App 持有 |
+| 13 | Play World 系统 | `beginPlay` 后为新的 Play Scene World 调用兼容 bootstrap |
+
+### 2.3 Server（`configureDefaultServerModules` / `-server`）
+
+| 顺序 | 模块 / 步骤 | 说明 |
+|------|------|------|
+| 1 | `AYEntity.Components` | 类型注册 |
+| 2 | `AYEntity.Runtime` | Entity 核心，无表现系统 |
+| 3 | `AYPhysics.Runtime`（可选） | 默认开；`-no-physics` 关 |
+| 4 | `AYEntity.PhysicsIntegration`（可选） | Physics 组件与固定步 ECS 桥 |
+| 5 | `AYEntity.ScriptIntegration`（可选） | ScriptComponent 类型注册 |
+| 6 | `AYScript.Runtime`（可选） | `enableScript`；依赖 Script integration |
+| 7 | `bindBuiltinHostServices` | 无 Device / Audio / Renderer |
 
 **跳过** Device / Audio / Renderer。`ApplicationImpl`：`GameDesc::serverMode` 或 CLI `-server`。
+
+### 2.4 项目可选模块
+
+第三阶段提供下列节点，但默认 Client/Server/Editor 都不会自动加入它们：
+
+| 模块 ID | 依赖 | 适用范围 |
+|------|------|------|
+| `AYVideo.Runtime` | `AYAudio.Runtime` | 有视频播放需求的 Client/Tool |
+| `AYNetwork.Online` | `AYNetwork.Runtime` | Lobby、Matchmaking、Session 服务 |
+| `AYNetwork.OnlineFlow` | `AYNetwork.Online` | 登录至加载/会话退出的应用流程 |
+| `AYOnlineApplication.Runtime` | `AYNetwork.OnlineFlow`、`AYApplication.RuntimeSceneLoader` | Client Online Flow 与 Scene 桥 |
+
+`GameDesc::configureModules` 在默认图配置完成后执行。Online 客户端优先调用
+`configureOnlineApplicationModules()`，它会复用已有稳定 ID，补齐 Network → Online →
+OnlineFlow → OnlineApplication，并在缺少 RuntimeSceneLoader 时于图冻结前报错。
+
+### 2.5 编译期能力边界
+
+根工程通过 `AY_ENABLE_ANIMATION/AUDIO/DEVICE/RENDERER/PHYSICS/SCRIPT/NETWORK`
+以及 `AY_ENABLE_AY2D/AYVIDEO/AYVOXEL` 决定是否创建对应 target。AYApplication
+只对实际存在的 target 编译 include 与装配分支，并导出同一组
+`AY_APPLICATION_HAS_*` capability；运行时请求未编译能力会返回明确失败，而不是
+静默注册或留下未解析符号。
+
+`windows-headless-debug` 关闭上述可选 Runtime，构建
+`AYApplication_HeadlessSmoke` 并形成真实最终链接。该预设复用项目现有的
+`out/build/vcpkg_installed`，同时关闭自身的 manifest 安装动作；依赖供应仍由
+默认项目配置负责，精简验证不会重同步或卸载现有包。
+
+截至第三阶段，上述默认 composition root 不再在模块安装后直接注册 GameLoop
+SubSystem。Host 接线、Editor DeviceManager 和每个 Play World 的 ECS system
+bootstrap 不属于 GameLoop SubSystem，因此仍由应用层持有。
 ---
 
 ## 3. 服务面（游戏 / 脚本怎么用）
@@ -108,10 +161,10 @@ auto* inv = host->service<InventorySystem>("game.inventory");
 
 `ApplicationImpl::run` / `EditorApp::run` 内使用 `EngineHostScope`；装配后调用 `bindBuiltinHostServices`。
 
-Physics 默认经装配表注册；也可手动：
+Physics 默认经模块图注册；兼容调用方也可手动：
 
 ```cpp
-ayt::app::registerPhysicsModule(desc);           // GameLoop SubSystem
+ayt::app::registerPhysicsModule(desc);           // 兼容直接注册
 // initialize 后：
 host->physics();                                 // lazy → PhysicsManager*
 // 或显式：
@@ -153,10 +206,13 @@ ayt::app::providePhysics(host, mgr);
 | Key 常量 | 字符串 | 类型 | 谁 provide | 空指针含义 |
 |----------|--------|------|------------|------------|
 | `kHostServiceResources` | `ayt.resource.ResourceManager` | `ResourceManager*` | `bindBuiltinHostServices`；`resources()` 另有 instance 回退 | 几乎不应为空 |
-| `kHostServicePhysics` | `ayt.physics.PhysicsManager` | `PhysicsManager*` | `registerPhysicsModule` / `providePhysics`；`physics()` 另有 SubSystem 惰性回退 | 未装配物理或尚未 initialize |
+| `kHostServicePhysics` | `ayt.physics.PhysicsManager` | `PhysicsManager*` | `AYPhysics.Runtime` / 兼容 `registerPhysicsModule` / `providePhysics`；`physics()` 另有 SubSystem 惰性回退 | 未装配物理或尚未 initialize |
 | `kHostServicePhysicsQuery` | `ayt.physics.IPhysicsQuery` | `IPhysicsQuery*` | `providePhysicsQuery` / SubSystem `query()` | 未装配物理或尚未 initialize |
 | `kHostServiceAudio` | `ayt.audio.AudioEngine` | `AudioEngine*` | bind 时若已 init；否则 `audio()` 惰性查 SubSystem | 无 Audio 模块或尚未 initialize |
 | `kHostServiceScenes` | `ayt.scene.SceneManager` | `SceneManager*` | `bindBuiltinHostServices`（PR-6 v0.1.3，Meyers singleton）；`scenes()` 另有 instance 回退 | 几乎不应为空（单例） |
+| `kHostServiceRuntimeSceneLoader` | `ayt.app.RuntimeSceneLoader` | `IRuntimeSceneLoader*` | `AYApplication.RuntimeSceneLoader` 安装，`bindBuiltinHostServices` 发布 | Client 禁用或未安装 RuntimeSceneLoader |
+| `kHostServiceOnlineFlow` | `ayt.net.OnlineFlowCoordinator` | `OnlineFlowCoordinator*` | `AYOnlineApplication.Runtime` 初始化 | 未选择 Online 栈或尚未初始化 |
+| `kHostServiceOnlineApplication` | `ayt.app.online.OnlineApplication` | `IOnlineApplicationSubSystem*` | `AYOnlineApplication.Runtime` 初始化 | 未选择 Online 栈或尚未初始化 |
 
 **新增行时：** 改代码键常量 + 改本表 +（若有）具名 API，同一 PR。
 
@@ -181,7 +237,7 @@ if (auto* save = host.service<ayt::save::SaveService>(kHostServiceSave)) {
 
 ## 5. CR 纪律
 
-1. 默认注册走 `registerDefault*Modules`，随后 `bindBuiltinHostServices`。  
+1. 默认 Host 走 `configureDefault*Modules -> GameDesc::configureModules -> prepare -> seal -> install`，随后 `bindBuiltinHostServices`；`registerDefault*Modules` 仅作兼容。
 2. 业务取资源/音频/物理：`currentEngineHost()->resources()/audio()/physics()`。  
 3. 新全局能力：走 §4，不要只加单例。  
 4. 改装配顺序：先改 §2 表再改 helper。  

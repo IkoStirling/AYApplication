@@ -13,6 +13,7 @@ TEST_SUITE(ApplicationTest)
         CHECK(desc.height == 720u);
         CHECK(desc.targetFPS == 60.0f);
         CHECK(desc.enableRenderThread);
+        CHECK_FALSE(static_cast<bool>(desc.configureModules));
     }
 
     TEST_CASE(Application_Create) {

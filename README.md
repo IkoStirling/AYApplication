@@ -27,6 +27,7 @@ AYApplication 是引擎 Host 装配层，负责应用启动、子系统注册、
 #include <AYApplication/RegisterDefaultModules.h>
 
 #include <AYOnlineApplication/OnlineApplication.h>
+#include <AYOnlineApplication/OnlineApplicationRuntimeModule.h>
 #include <AYOnlineApplication/OnlineContent.h>
 #include <AYOnlineApplication/DedicatedApplication.h>
 ```
@@ -41,11 +42,55 @@ AYApplication 是引擎 Host 装配层，负责应用启动、子系统注册、
 `IModuleContext`；`EngineModuleRuntime` 持有一个 `ModuleManager`，
 提供 `prepare()`、`install()` 和逆序 `shutdown()`。其中
 `prepare()` 只完成依赖解析和类型注册，调用方可以在 `install()` 前锁定
-组件或反射注册表。
+组件或反射注册表。`EngineModuleContext` 同时提供唯一的 `ComponentRegistry` 服务和
+GameLoop SubSystem 发布服务，类型模块不得自行回退到另一份注册表，
+`SubSystemModule` 因而可以把模块依赖顺序映射为 SubSystem 的注册与逆序撤销。
 
-AYEntity 当前提供首个注册阶段试点 `EntityComponentModule`。Host 使用它时在
-`prepare()` 后封存 `ComponentRegistry`，再调用 `install()`。默认 Client、
-Server、Editor 装配仍未替换，也未迁移 GameLoop SubSystem 所有权。
+默认 Client、Server、Editor Host 已使用模块图装配运行时能力：
+
+| 模块 ID | 运行时能力 |
+|---|---|
+| `AYEntity.Components` | Entity 组件元数据注册 |
+| `AYEditor.Components` | Editor 自有组件元数据注册（仅 Editor） |
+| `AYDevice.Runtime` | 窗口与输入（Client） |
+| `AYEntity.Runtime` | Entity SubSystem 与 Core systems |
+| `AYEntity.AnimationIntegration` | Animation 组件与系统（表现层可选） |
+| `AYEntity.RenderIntegration` | Mesh/SkinnedMesh 系统（表现层可选） |
+| `AYEntity.2DIntegration` | Tilemap/Sprite/OrthoCamera 系统（表现层可选） |
+| `AYEntity.PhysicsIntegration` | Physics 组件与固定步 ECS 桥（物理可选） |
+| `AYEntity.ScriptIntegration` | ScriptComponent 类型（脚本可选） |
+| `AYEntity.NetworkIntegration` | NetworkComponent 类型（网络可选） |
+| `AYRenderer.Runtime` | Renderer SubSystem |
+| `AYPhysics.Runtime` | Physics SubSystem |
+| `AYScript.Runtime` | Script SubSystem |
+| `AYAudio.Runtime` | Audio SubSystem（可选） |
+| `AYNetwork.Runtime` | Network SubSystem（Editor 默认；其他 Host 可按需加入） |
+| `AYApplication.RuntimeSceneLoader` | 帧边界场景加载与切换（Client，可选） |
+| `AYVideo.Runtime` | Video SubSystem（项目可选；严格依赖 Audio） |
+| `AYNetwork.Online` | Online Services（项目可选；依赖 Network） |
+| `AYNetwork.OnlineFlow` | 登录/大厅/匹配/加载流程（项目可选；依赖 Online） |
+| `AYOnlineApplication.Runtime` | Online Flow 与场景加载桥（项目可选） |
+
+Host 的固定顺序是 `default configure -> project configure -> prepare ->
+ComponentRegistry::seal -> install`，
+随后绑定内建服务并启动 GameLoop。默认 Host 在模块安装后不再直接注册额外的
+GameLoop SubSystem；旧 `registerDefault*Modules()` API 仅保留作兼容入口。
+Scene/EventBus 观察者、Task 完成 hook、Editor 自有 DeviceManager 与输入桥仍是
+Host 接线职责。Video 与 Online 栈已经拥有模块节点，但不会进入默认 Client/Server/Editor；
+项目通过 `GameDesc::configureModules` 显式选择，普通应用不会因此增加 FFmpeg 或在线后端。
+
+```cpp
+ayt::app::GameDesc desc;
+desc.configureModules = [onlineConfig](
+    ayt::app::EngineModuleRuntime& runtime) {
+    return ayt::app::online::configureOnlineApplicationModules(
+        runtime, onlineConfig);
+};
+auto app = ayt::app::IApplication::create(desc);
+```
+
+该回调在默认 Client/Server 图加入后、`prepare()` 前执行；Online helper 要求 Client 图
+已包含 `AYApplication.RuntimeSceneLoader`。旧显式注册函数仍可用于独立 Demo 和迁移期代码。
 
 ## Scene-backed Dedicated Server
 
@@ -98,8 +143,12 @@ allocation、逐玩家准入、真实场景 tick、首名玩家离开后的席�
 ## 当前限制与下一步
 
 - Dedicated 进程不会注册窗口、渲染、UI 或音频子系统。
-- `AYScene` 当前仍依赖单体 `AYEntity`，因此最终链接命令可能包含表现层静态库；
-  运行时 DLL 依赖不包含渲染/UI/音频后端。
+- `AYScene` 与默认 Application 核心链路只依赖 `AYEntityCore`；禁用某项 CMake
+  feature 后，对应 Runtime 与 Entity integration target 均不会生成或进入最终链接。
+- `windows-headless-debug` 会生成 `AYApplication_HeadlessSmoke`；构建后运行它可防止
+  Renderer/Audio/Physics/Script/Device/Animation/Network 重新泄漏进最小链接闭包。
+- 最小 Application 仍使用 AYResource/AYScene，因此保留通用资产导入、存储与
+  序列化依赖；本次边界不等同于“零第三方依赖”。
 - 下一步是接入游戏项目的真实 authority systems，并完成生产会话后端分配到
   两客户端进入场景的端到端验证。具体验收条件见 [design.md](design.md)。
 
