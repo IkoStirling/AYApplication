@@ -19,8 +19,9 @@ MyGame/
 │   ├── logic/                  # 与渲染、窗口无关的游戏规则
 │   ├── data/                   # 游戏数据结构与加载
 │   └── systems/                # 游戏 SubSystem / ECS system
-├── assets/
+├── Assets/
 │   └── worlds/                 # .ayscene 文件
+├── project.ayproject.json      # Editor/工具读取的项目、World 与运行清单
 └── tests/                      # 游戏规则和装配验证
 ```
 
@@ -60,7 +61,8 @@ ay_add_game_executable(
     TARGET MyGameApp
     SOURCES MyGameApp.cpp
     LIBRARIES my_game
-    ASSET_DIR "${CMAKE_SOURCE_DIR}/assets"
+    ASSET_DIR "${CMAKE_SOURCE_DIR}/Assets"
+    ASSET_OUTPUT_DIR "Assets"
 )
 ```
 
@@ -74,7 +76,7 @@ ayt::app::GameProject makeGameProject()
     ayt::app::GameProject game;
     game.id = "my_game";
     game.displayName = "My Game";
-    game.assetRoot = "assets";
+    game.assetRoot = "Assets";
     game.startupWorld = "main_menu";
     game.worlds = {
         {.id = "main_menu", .scenePath = "worlds/main_menu.ayscene"},
@@ -120,9 +122,50 @@ World 保存本关的实体、组件和临时状态。跨 World 仍需保留的�
 
 新增关卡只需完成三件事：
 
-1. 在 `assets/worlds` 添加 `.ayscene`。
+1. 在 `Assets/worlds` 添加 `.ayscene`。
 2. 在 `game/MyGame.cpp` 的 `worlds` 中登记稳定 ID 和相对路径。
 3. 从游戏系统调用 `requestWorld("stable_id")`。
 
 命令行 `-scene <path>` 可临时覆盖客户端启动 World；`-server` 选择无窗口的 Server
 装配。正式流程仍应使用项目内声明的稳定 World ID。
+
+## Editor 项目清单
+
+项目根目录提交 `project.ayproject.json`。它是工具入口，记录资产目录、游戏代码位置、
+可运行程序以及各 World 关联的 Scene、UI 和 Tilemap；带回调的模块装配仍以
+`game/MyGame.cpp` 中的 `GameProject` 为准。
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "my_game",
+  "displayName": "My Game",
+  "engineProfile": "CLIENT_2D",
+  "paths": {
+    "assets": "Assets",
+    "gameAssembly": "game/MyGame.cpp",
+    "gameCode": "src"
+  },
+  "startupWorld": "main_menu",
+  "worlds": [
+    {
+      "id": "main_menu",
+      "scene": "worlds/main_menu.ayscene",
+      "ui": "ui/main_menu.ui.json",
+      "tilemaps": []
+    }
+  ],
+  "run": {
+    "executable": "out/build/windows-debug/bin/MyGameApp.exe",
+    "workingDirectory": ".",
+    "arguments": []
+  }
+}
+```
+
+路径必须是项目根目录或资产根目录内的相对路径。`.ayeditor/run.json` 只作为个人或
+临时运行覆盖；团队共享配置写在项目清单。Tilemap 编辑器保存
+`.aytilemap.json` 时会在 `Assets/tilemaps` 同步生成运行时 `.aytilemap`，Scene 中
+引用后者。当前 UI 文件会被清单和验证器关联到 World；独立客户端的 World UI
+Overlay 生命周期尚未接入 `AYApplication`，在该能力完成前游戏代码不能假定它会
+随 World 自动显示。
