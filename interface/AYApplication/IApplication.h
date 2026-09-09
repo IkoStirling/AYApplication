@@ -84,6 +84,9 @@ struct AppCommandLine {
 
     // 解析
     static AppCommandLine parse(int argc, char* argv[]);
+    /// Parse a native wide-character command line (for example wWinMain's
+    /// __wargv) and store every argument as UTF-8.
+    static AppCommandLine parse(int argc, wchar_t* argv[]);
 
     // 帮助信息
     void printHelp(const char* appName) const;

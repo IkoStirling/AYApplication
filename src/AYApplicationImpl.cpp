@@ -31,11 +31,114 @@
 #include <AYEventSystem/SubscriptionScope.h>
 
 #include <cstdio>
+#include <cstdint>
 #include <memory>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace ayt::app
 {
+
+namespace
+{
+
+void appendUtf8(std::string& output, std::uint32_t codePoint)
+{
+    if (codePoint <= 0x7fu) {
+        output.push_back(static_cast<char>(codePoint));
+    } else if (codePoint <= 0x7ffu) {
+        output.push_back(static_cast<char>(0xc0u | (codePoint >> 6u)));
+        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
+    } else if (codePoint <= 0xffffu) {
+        output.push_back(static_cast<char>(0xe0u | (codePoint >> 12u)));
+        output.push_back(static_cast<char>(0x80u | ((codePoint >> 6u) & 0x3fu)));
+        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
+    } else {
+        output.push_back(static_cast<char>(0xf0u | (codePoint >> 18u)));
+        output.push_back(static_cast<char>(0x80u | ((codePoint >> 12u) & 0x3fu)));
+        output.push_back(static_cast<char>(0x80u | ((codePoint >> 6u) & 0x3fu)));
+        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
+    }
+}
+
+std::string wideToUtf8(std::wstring_view input)
+{
+    std::string output;
+    output.reserve(input.size());
+
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        std::uint32_t codePoint = static_cast<std::uint32_t>(input[i]);
+        if constexpr (sizeof(wchar_t) == 2) {
+            if (codePoint >= 0xd800u && codePoint <= 0xdbffu &&
+                i + 1u < input.size()) {
+                const std::uint32_t low =
+                    static_cast<std::uint32_t>(input[i + 1u]);
+                if (low >= 0xdc00u && low <= 0xdfffu) {
+                    codePoint = 0x10000u + ((codePoint - 0xd800u) << 10u) +
+                        (low - 0xdc00u);
+                    ++i;
+                } else {
+                    codePoint = 0xfffdu;
+                }
+            } else if (codePoint >= 0xd800u && codePoint <= 0xdfffu) {
+                codePoint = 0xfffdu;
+            }
+        }
+
+        if (codePoint > 0x10ffffu ||
+            (codePoint >= 0xd800u && codePoint <= 0xdfffu)) {
+            codePoint = 0xfffdu;
+        }
+        appendUtf8(output, codePoint);
+    }
+    return output;
+}
+
+AppCommandLine parseArguments(std::vector<std::string> args)
+{
+    AppCommandLine cmd;
+    cmd.args = std::move(args);
+
+    for (std::size_t i = 1; i < cmd.args.size(); ++i) {
+        const std::string_view arg = cmd.args[i];
+
+        if (arg == "-help" || arg == "--help") {
+            cmd.help = true;
+        } else if (arg == "-version" || arg == "--version") {
+            cmd.version = true;
+        } else if (arg == "-debug") {
+            cmd.debug = true;
+        } else if (arg == "-no-audio") {
+            cmd.noAudio = true;
+        } else if (arg == "-no-physics") {
+            cmd.noPhysics = true;
+        } else if (arg == "-server") {
+            cmd.server = true;
+        } else if (arg == "-width" && i + 1u < cmd.args.size()) {
+            cmd.width = std::stoul(cmd.args[++i]);
+        } else if (arg == "-height" && i + 1u < cmd.args.size()) {
+            cmd.height = std::stoul(cmd.args[++i]);
+        } else if (arg == "-fps" && i + 1u < cmd.args.size()) {
+            cmd.fps = std::stof(cmd.args[++i]);
+        } else if (arg == "-log" && i + 1u < cmd.args.size()) {
+            cmd.logLevel = cmd.args[++i];
+        } else if (arg == "-config" && i + 1u < cmd.args.size()) {
+            cmd.configFile = cmd.args[++i];
+        } else if (arg == "-asset-root" && i + 1u < cmd.args.size()) {
+            cmd.assetRoot = cmd.args[++i];
+        } else if (arg == "-user-data" && i + 1u < cmd.args.size()) {
+            cmd.userDataPath = cmd.args[++i];
+        } else if (arg == "-scene" && i + 1u < cmd.args.size()) {
+            cmd.scenePath = cmd.args[++i];
+        } else {
+            cmd.unknownArgs.push_back(cmd.args[i]);
+        }
+    }
+    return cmd;
+}
+
+} // namespace
 
 AppException::AppException(Code code, const char* message)
     : _code(code), _message(message) {}
@@ -50,46 +153,28 @@ const char* AppException::what() const noexcept
 
 AppCommandLine AppCommandLine::parse(int argc, char* argv[])
 {
-    AppCommandLine cmd;
-    cmd.args.assign(argv, argv + argc);
-
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg = argv[i];
-
-        if (arg == "-help" || arg == "--help") {
-            cmd.help = true;
-        } else if (arg == "-version" || arg == "--version") {
-            cmd.version = true;
-        } else if (arg == "-debug") {
-            cmd.debug = true;
-        } else if (arg == "-no-audio") {
-            cmd.noAudio = true;
-        } else if (arg == "-no-physics") {
-            cmd.noPhysics = true;
-        } else if (arg == "-server") {
-            cmd.server = true;
-        } else if (arg == "-width" && i + 1 < argc) {
-            cmd.width = std::stoul(argv[++i]);
-        } else if (arg == "-height" && i + 1 < argc) {
-            cmd.height = std::stoul(argv[++i]);
-        } else if (arg == "-fps" && i + 1 < argc) {
-            cmd.fps = std::stof(argv[++i]);
-        } else if (arg == "-log" && i + 1 < argc) {
-            cmd.logLevel = argv[++i];
-        } else if (arg == "-config" && i + 1 < argc) {
-            cmd.configFile = argv[++i];
-        } else if (arg == "-asset-root" && i + 1 < argc) {
-            cmd.assetRoot = argv[++i];
-        } else if (arg == "-user-data" && i + 1 < argc) {
-            cmd.userDataPath = argv[++i];
-        } else if (arg == "-scene" && i + 1 < argc) {
-            cmd.scenePath = argv[++i];
-        } else {
-            cmd.unknownArgs.push_back(argv[i]);
+    std::vector<std::string> args;
+    if (argc > 0 && argv != nullptr) {
+        args.reserve(static_cast<std::size_t>(argc));
+        for (int i = 0; i < argc; ++i) {
+            args.emplace_back(argv[i] != nullptr ? argv[i] : "");
         }
     }
+    return parseArguments(std::move(args));
+}
 
-    return cmd;
+AppCommandLine AppCommandLine::parse(int argc, wchar_t* argv[])
+{
+    std::vector<std::string> args;
+    if (argc > 0 && argv != nullptr) {
+        args.reserve(static_cast<std::size_t>(argc));
+        for (int i = 0; i < argc; ++i) {
+            args.push_back(argv[i] != nullptr
+                ? wideToUtf8(argv[i])
+                : std::string{});
+        }
+    }
+    return parseArguments(std::move(args));
 }
 
 void AppCommandLine::printHelp(const char* appName) const

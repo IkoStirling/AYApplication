@@ -95,5 +95,6 @@ public:
 /// the complete synchronous run.
 int runGameProject(GameProject project, AppCommandLine commandLine = {});
 int runGameProject(GameProject project, int argc, char* argv[]);
+int runGameProject(GameProject project, int argc, wchar_t* argv[]);
 
 } // namespace ayt::app

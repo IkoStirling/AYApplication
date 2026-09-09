@@ -448,4 +448,11 @@ int runGameProject(GameProject project, int argc, char* argv[])
         AppCommandLine::parse(argc, argv));
 }
 
+int runGameProject(GameProject project, int argc, wchar_t* argv[])
+{
+    return runGameProject(
+        std::move(project),
+        AppCommandLine::parse(argc, argv));
+}
+
 } // namespace ayt::app
