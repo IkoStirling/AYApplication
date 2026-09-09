@@ -28,6 +28,7 @@ set(HEADERS
     interface/AYApplication/IEngineHost.h
     interface/AYApplication/EngineRuntimeScope.h
     interface/AYApplication/GameProject.h
+    interface/AYApplication/ProjectContentValidator.h
     interface/AYApplication/IHostPluginHooks.h
     interface/AYApplication/RegisterDefaultModules.h
     interface/AYApplication/RuntimeSceneLoader.h
@@ -120,6 +121,39 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )
+
+# Keep content inspection out of the runtime application library.  The
+# full-client implementation may use AYUI loaders, while headless builds
+# deliberately compile the same API without bringing UI into AYApplication.
+find_package(nlohmann_json CONFIG REQUIRED)
+add_library(AYProjectContentValidationCore STATIC
+    src/AYProjectContentValidator.cpp
+    interface/AYApplication/ProjectContentValidator.h)
+target_include_directories(AYProjectContentValidationCore PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/interface)
+target_link_libraries(AYProjectContentValidationCore
+    PUBLIC AYScene AYResource
+    PRIVATE nlohmann_json::nlohmann_json)
+target_compile_definitions(AYProjectContentValidationCore PRIVATE
+    AY_APPLICATION_HAS_DEVICE=${AY_APPLICATION_HAS_DEVICE})
+if(AY_APPLICATION_HAS_DEVICE AND TARGET AYUI)
+    target_link_libraries(AYProjectContentValidationCore PRIVATE AYUI)
+endif()
+target_compile_options(AYProjectContentValidationCore PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+
+option(AY_BUILD_CONTENT_VALIDATOR
+    "Build the independent project content validator" ${BUILD_TESTING})
+if(AY_BUILD_CONTENT_VALIDATOR)
+    add_executable(AYProjectContentValidator
+        tools/project_content_validator/main.cpp)
+    target_link_libraries(AYProjectContentValidator PRIVATE
+        AYProjectContentValidationCore AYEntity)
+    target_compile_options(AYProjectContentValidator PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+endif()
 
 # A final-link and startup proof for the minimal build graph. Unlike building
 # the AYApplication static library alone, this catches accidental references

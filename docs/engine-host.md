@@ -111,7 +111,7 @@ OnlineFlow → OnlineApplication，并在缺少 RuntimeSceneLoader 时于图冻�
 ### 2.5 编译期能力边界
 
 根工程通过 `AY_ENABLE_ANIMATION/AUDIO/DEVICE/RENDERER/PHYSICS/SCRIPT/NETWORK`
-以及 `AY_ENABLE_AY2D/AYVIDEO/AYVOXEL` 决定是否创建对应 target。AYApplication
+以及 `AY_ENABLE_AY2D/AY_ENABLE_ENTITY_2D_SCHEMA/AYVIDEO/AYVOXEL` 决定是否创建对应 target。AYApplication
 只对实际存在的 target 编译 include 与装配分支，并导出同一组
 `AY_APPLICATION_HAS_*` capability；运行时请求未编译能力会返回明确失败，而不是
 静默注册或留下未解析符号。
@@ -120,6 +120,10 @@ OnlineFlow → OnlineApplication，并在缺少 RuntimeSceneLoader 时于图冻�
 `AYApplication_HeadlessSmoke` 并形成真实最终链接。该预设复用项目现有的
 `out/build/vcpkg_installed`，同时关闭自身的 manifest 安装动作；依赖供应仍由
 默认项目配置负责，精简验证不会重同步或卸载现有包。
+
+`AY_ENABLE_ENTITY_2D_SCHEMA` 只编译 Sprite、Tilemap、OrthoCamera 的序列化
+元数据，不编译 Renderer 或 2D presentation systems。游戏的 headless 内容验证
+因此能真实加载与客户端相同的混合 2D/3D Scene。
 
 截至第三阶段，上述默认 composition root 不再在模块安装后直接注册 GameLoop
 SubSystem。Host 接线、Editor DeviceManager 和每个 Play World 的 ECS system
