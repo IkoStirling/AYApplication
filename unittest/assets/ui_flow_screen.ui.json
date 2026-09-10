@@ -1,0 +1,14 @@
+{
+  "type": "Panel",
+  "id": "flow_fixture_root",
+  "size": { "w": 320, "h": 180 },
+  "children": [
+    {
+      "type": "Button",
+      "id": "flow_fixture_button",
+      "position": { "x": 24, "y": 20 },
+      "size": { "w": 120, "h": 32 },
+      "text": "Continue"
+    }
+  ]
+}

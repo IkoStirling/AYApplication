@@ -1189,7 +1189,34 @@ AYModule 负责；类型注册不提供通用回滚。
 - Video 与 Online 仍保留显式注册函数，供独立 Demo 和旧 composition root 兼容；
 - 动态插件加载、热卸载和 C ABI 不属于本阶段。
 
-## 15. 参考
+## 15. Application UI Flow Runtime
+
+阶段二把跨 World 的 UI 编排实现为可选静态目标 `AYApplicationUI`，而不是向核心
+`AYApplication` 增加 AYUI 硬依赖。Server/headless 构建图保持不变；Client 或工具宿主在
+`TARGET AYUI` 时可使用以下三层：
+
+- `UIFlowRuntime`：持有 Entry、并行 Region/State、Context activation、Slot restore floor、
+  Scope key、Signal queue 与 Action registry；不直接持有 Widget。
+- `IUIFlowScreenHost` / `UIManagerFlowScreenHost`：把逻辑 Screen mount 映射成独立
+  `UILayoutLoader` 和有序 Widget Layer，负责视口同步与 Screen 文件热重载。
+- `UIFlowRuntimeModule`：作为 Unscaled/Presentation SubSystem 进入模块图，并以
+  `kHostServiceUIFlowRuntime` 发布非 owning `UIFlowRuntime*`。
+
+换屏采用 mount-new-before-unmount-old：任一新布局加载失败时撤销本轮新增 mount，旧 UI
+保持可见。Context 以 priority、activation serial 排序；Slot 支持 capacity、Hide 和
+restorePrevious。Application Scope 永久存在，World/Owner Scope 结束时清除绑定 Context 并只
+卸载对应 Screen。Signal 在 UI 线程同步串行，重入进入有界队列；Guard、Graph request、Action
+handler 都通过回调/registry 扩展，异常不得越过 runtime 边界。
+
+项目通过 `GameDesc::configureModules` 显式加入 `UIFlowRuntimeModule`，并传入已经初始化的
+`UIManagerFlowScreenHost`。Flow 子树由该 Host 持有并以 external child 接入 `UIManager`；宿主替换
+根布局时，子树先安全脱离，再在下一次 update 重挂，不会丢失当前 Screen。这一步不等价于
+Scene bridge：Scene 生命周期和区域组件在下一
+阶段只调用 `beginScope/endScope/emitSignal/activateContext`，不能查找或直接修改 Widget。
+
+完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
+
+## 16. 参考
 
 - [O3DE Application](https://docs.o3de.org/)
 - [Unreal Engine Launch](https://docs.unrealengine.com/en-US/Programming/Development/Architecture/UnrealArchitecture/)

@@ -51,6 +51,8 @@ inline constexpr const char* kHostServiceRuntimeSceneLoader =
     "ayt.app.RuntimeSceneLoader";
 inline constexpr const char* kHostServiceGameWorldRouter =
     "ayt.app.GameWorldRouter";
+inline constexpr const char* kHostServiceUIFlowRuntime =
+    "ayt.app.UIFlowRuntime";
 
 /// Process-scoped engine host: assembly + service discovery (not a gameplay module).
 class IEngineHost {

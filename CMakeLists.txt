@@ -122,6 +122,33 @@ target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )
 
+# Client-only application UI orchestration. Keeping this in a companion target
+# preserves AYApplication's server/headless graph while making the persistent
+# runtime an Application-owned service rather than an AYUI singleton.
+if(TARGET AYUI)
+    add_library(AYApplicationUI STATIC
+        ui/src/AYUIFlowRuntime.cpp
+        ui/src/AYUIFlowRuntimeModule.cpp
+        ui/src/AYUIManagerFlowScreenHost.cpp
+        ui/include/AYApplication/UIFlowRuntime.h
+        ui/include/AYApplication/UIFlowRuntimeModule.h
+        ui/include/AYApplication/UIManagerFlowScreenHost.h
+        AYApplicationUI.h
+    )
+    target_include_directories(AYApplicationUI PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/ui/include
+    )
+    target_link_libraries(AYApplicationUI PUBLIC
+        AYApplication
+        AYUI
+    )
+    target_compile_options(AYApplicationUI PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+    )
+endif()
+
 # Keep content inspection out of the runtime application library.  The
 # full-client implementation may use AYUI loaders, while headless builds
 # deliberately compile the same API without bringing UI into AYApplication.
@@ -267,6 +294,33 @@ if(BUILD_TESTING AND
     AY_APPLICATION_HAS_NETWORK))
     enable_testing()
     add_subdirectory(unittest)
+
+    # Kept here instead of appending to unittest/CMakeLists.txt so the
+    # optional client-only test follows the same target gate as
+    # AYApplicationUI without coupling the existing headless test graph.
+    if(TARGET AYApplicationUI)
+        add_executable(UIFlowRuntimeTest
+            unittest/TestMain.cpp
+            unittest/Test_UIFlowRuntime.cpp
+        )
+        target_link_libraries(UIFlowRuntimeTest PRIVATE
+            AYApplicationUI
+            AYTest
+        )
+        target_compile_options(UIFlowRuntimeTest PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>: /W4>
+            $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+        )
+        target_compile_definitions(UIFlowRuntimeTest PRIVATE
+            AY_APPLICATION_UI_TEST_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/unittest/assets")
+        if(MSVC)
+            target_link_options(UIFlowRuntimeTest PRIVATE
+                "/FORCE:MULTIPLE"
+                "/IGNORE:4005"
+                "/IGNORE:4006")
+        endif()
+        ay_add_test(UIFlowRuntimeTest LABELS "ui-flow;ayapplication")
+    endif()
 endif()
 
 message(STATUS "AYApplication v0.1.0 (EngineHost services + module assembly) — see ${CMAKE_CURRENT_SOURCE_DIR}/docs/engine-host.md")
