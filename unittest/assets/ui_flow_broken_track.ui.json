@@ -1,0 +1,21 @@
+{
+  "animations": [
+    {
+      "name": "broken.enter",
+      "tracks": [
+        {
+          "target": "missing_widget",
+          "property": "opacity",
+          "keyframes": [
+            { "timeMs": 0, "value": 0.0 },
+            { "timeMs": 100, "value": 1.0 }
+          ]
+        }
+      ]
+    }
+  ],
+  "root": {
+    "type": "Panel",
+    "id": "actual_root"
+  }
+}

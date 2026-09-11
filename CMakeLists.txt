@@ -127,12 +127,14 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 # runtime an Application-owned service rather than an AYUI singleton.
 if(TARGET AYUI)
     add_library(AYApplicationUI STATIC
+        ui/src/AYUIFlowAssetValidation.cpp
         ui/src/AYUIFlowSceneBridge.cpp
         ui/src/AYUIFlowSceneBridgeModule.cpp
         ui/src/AYUIFlowSceneComponents.cpp
         ui/src/AYUIFlowRuntime.cpp
         ui/src/AYUIFlowRuntimeModule.cpp
         ui/src/AYUIManagerFlowScreenHost.cpp
+        ui/include/AYApplication/UIFlowAssetValidation.h
         ui/include/AYApplication/UIFlowSceneBridge.h
         ui/include/AYApplication/UIFlowSceneBridgeModule.h
         ui/include/AYApplication/UIFlowSceneComponents.h

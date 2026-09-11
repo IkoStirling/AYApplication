@@ -1,3 +1,4 @@
+#include <AYApplication/UIFlowAssetValidation.h>
 #include <AYApplication/UIFlowRuntime.h>
 #include <AYApplication/UIManagerFlowScreenHost.h>
 #include <AYTest.h>
@@ -994,6 +995,61 @@ TEST_CASE(screen_host_hands_off_enter_exit_animation_and_reduced_motion)
     host.unmountScreen(51);
     CHECK_FALSE(host.isScreenRetiring(51));
     ayt::ui::AnimationSettings::get().reset();
+}
+
+TEST_CASE(flow_asset_validation_builds_deduplicated_deployable_dependencies)
+{
+    UIFlowDocument document = arbitrationDocument();
+    document.screens[0].layoutAsset = "ui_flow_screen.ui.json";
+    document.screens[0].enterAnimation = "flow.enter";
+    document.screens[1].layoutAsset = "ui_flow_screen.ui.json";
+    document.screens[1].exitAnimation = "flow.exit";
+
+    const UIFlowAssetValidationResult result = validateUIFlowAssets(
+        document, AY_APPLICATION_UI_TEST_ASSET_ROOT);
+    CHECK(result.valid());
+    CHECK(result.diagnostics.empty());
+    CHECK(result.dependencies.size() == 1u);
+    if (result.dependencies.empty()) return;
+    CHECK(result.dependencies.front().asset == "ui_flow_screen.ui.json");
+    CHECK(result.dependencies.front().screens.size() == 2u);
+    CHECK(result.dependencies.front().screens[0] == "menu");
+    CHECK(result.dependencies.front().screens[1] == "pause");
+}
+
+TEST_CASE(flow_asset_validation_reports_missing_clips_files_and_root_escape)
+{
+    UIFlowDocument document = arbitrationDocument();
+    document.screens[0].layoutAsset = "ui_flow_screen.ui.json";
+    document.screens[0].enterAnimation = "missing.clip";
+    document.screens[1].layoutAsset = "missing.ui.json";
+
+    UIFlowAssetValidationResult result = validateUIFlowAssets(
+        document, AY_APPLICATION_UI_TEST_ASSET_ROOT);
+    CHECK_FALSE(result.valid());
+    CHECK(result.diagnostics.size() == 2u);
+    CHECK(result.diagnostics[0].path == "$.screens[0].enterAnimation");
+    CHECK(result.diagnostics[1].path == "$.screens[1].layoutAsset");
+
+    document.screens[0].enterAnimation.clear();
+    document.screens[1].layoutAsset = "../outside.ui.json";
+    result = validateUIFlowAssets(document, AY_APPLICATION_UI_TEST_ASSET_ROOT);
+    CHECK_FALSE(result.valid());
+    CHECK(result.diagnostics.size() == 1u);
+    CHECK(result.diagnostics.front().path == "$.screens[1].layoutAsset");
+    CHECK(result.diagnostics.front().message.find("escapes")
+          != std::string::npos);
+
+    document.screens[0].layoutAsset = "ui_flow_broken_track.ui.json";
+    document.screens[0].enterAnimation = "broken.enter";
+    document.screens[1].layoutAsset = "ui_flow_screen.ui.json";
+    result = validateUIFlowAssets(document, AY_APPLICATION_UI_TEST_ASSET_ROOT);
+    CHECK_FALSE(result.valid());
+    CHECK(result.diagnostics.size() == 1u);
+    CHECK(result.diagnostics.front().path
+          == "$.screens[0].enterAnimation");
+    CHECK(result.diagnostics.front().message.find("unresolved")
+          != std::string::npos);
 }
 
 TEST_SUITE_END

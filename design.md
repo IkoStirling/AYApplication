@@ -1231,6 +1231,13 @@ ignore/cancel/reverse 中断策略；`completeGraphExecution()` 驱动 exit → 
 `UIManagerFlowScreenHost` 使用 Screen 自有动画库完成 enter/exit 交接，并自然遵循 AYUI reduced-motion
 设置；`consumeHandled` 通过显式容器能力重试下层目标，`blockLower` 仍是硬边界。
 
+阶段六补齐生产资产闭包。`validateUIFlowAssets()` 在不启动 Runtime 的情况下复用生产
+`UILayoutLoader`，检查 Screen 路径必须位于项目 asset root 内、布局可构造、enter/exit clip
+存在且动画轨道能解析到 Widget；相同布局只加载一次。结果同时返回按 portable path 排序、
+去重并带反向 Screen 引用的 `UIFlowAssetDependency`，供编辑器诊断和内容打包直接消费。
+`StructureOnly` profile 只做契约、路径和文件闭包检查，保持 headless 验证不构造 Widget；
+`FullClient` profile 才执行真实布局和动画验证。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. 参考
