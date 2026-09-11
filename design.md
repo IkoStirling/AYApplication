@@ -1224,6 +1224,13 @@ Bridge 订阅现有 Scene 生命周期事件，在 `FramePhase::World` 同步 Wo
 并以 O(volume × participant) 的确定性扫描覆盖少量 authored UI region；大规模区域由物理 broadphase
 检测后调用显式入口。Scene scope 挂载失败时旧 UI 保持不变，Bridge 在后续帧自动重试同步。
 
+阶段五补齐生产门禁：`UIFlowRuntime` 支持异步 Graph execution ID 和每 Region 的 queue/coalesce/
+ignore/cancel/reverse 中断策略；`completeGraphExecution()` 驱动 exit → transition → enter pipeline。
+`reload()` 在完整验证后保留兼容的手动 Context handle 与活动 Region，布局变化才触发事务式 remount；
+运行中的异步 Graph 会明确拒绝 reload。Signal replay 与有界 trace 用于问题复现，不改变正常分发契约。
+`UIManagerFlowScreenHost` 使用 Screen 自有动画库完成 enter/exit 交接，并自然遵循 AYUI reduced-motion
+设置；`consumeHandled` 通过显式容器能力重试下层目标，`blockLower` 仍是硬边界。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. 参考

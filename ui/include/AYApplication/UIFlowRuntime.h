@@ -45,6 +45,8 @@ struct UIFlowScreenMountRequest
         ayt::ui::UIFlowInputPolicy::ConsumeHandled;
     bool blocksLowerInput = false;
     std::uint32_t orderInLayer = 0;
+    std::string enterAnimation;
+    std::string exitAnimation;
     UIFlowPayload parameters;
 };
 
@@ -71,6 +73,7 @@ struct UIFlowMountedScreen
     std::uint64_t mountId = 0;
     std::uint64_t activationSerial = 0;
     std::string screenId;
+    std::string layoutAsset;
     std::string layerId;
     std::string slotId;
     std::string contextId;
@@ -78,6 +81,12 @@ struct UIFlowMountedScreen
     std::string scopeKey;
     int layerOrder = 0;
     std::uint32_t orderInLayer = 0;
+    ayt::ui::UIFlowInputPolicy inputPolicy =
+        ayt::ui::UIFlowInputPolicy::ConsumeHandled;
+    bool blocksLowerInput = false;
+    std::string enterAnimation;
+    std::string exitAnimation;
+    UIFlowPayload parameters;
 };
 
 struct UIFlowActionInvocation
@@ -104,6 +113,51 @@ struct UIFlowGraphRequest
     std::string transitionId;
 };
 
+using UIFlowGraphExecutionId = std::uint64_t;
+
+enum class UIFlowGraphStartState : std::uint8_t
+{
+    Completed,
+    Running,
+    Rejected,
+};
+
+struct UIFlowGraphExecutionRequest
+{
+    UIFlowGraphExecutionId executionId = 0;
+    UIFlowGraphRequest graph;
+};
+
+struct UIFlowGraphStartResult
+{
+    UIFlowGraphStartState state = UIFlowGraphStartState::Completed;
+    std::string message;
+
+    static UIFlowGraphStartResult completed();
+    static UIFlowGraphStartResult running();
+    static UIFlowGraphStartResult rejected(std::string message);
+};
+
+enum class UIFlowGraphInterrupt : std::uint8_t
+{
+    Cancel,
+    Reverse,
+};
+
+struct UIFlowRuntimeTrace
+{
+    std::uint64_t serial = 0;
+    std::string category;
+    std::string id;
+    std::string detail;
+};
+
+struct UIFlowReplaySignal
+{
+    std::string signalId;
+    UIFlowPayload payload;
+};
+
 using UIFlowActionHandler =
     std::function<UIFlowActionResult(const UIFlowActionInvocation&)>;
 using UIFlowSignalHandler = std::function<void(
@@ -115,6 +169,11 @@ using UIFlowGuardEvaluator = std::function<bool(
     std::string& error)>;
 using UIFlowGraphRequestHandler =
     std::function<void(const UIFlowGraphRequest& request)>;
+using UIFlowAsyncGraphRequestHandler = std::function<UIFlowGraphStartResult(
+    const UIFlowGraphExecutionRequest& request)>;
+using UIFlowGraphInterruptHandler = std::function<void(
+    UIFlowGraphExecutionId executionId,
+    UIFlowGraphInterrupt interrupt)>;
 
 // Persistent application-level orchestration. It is deliberately independent
 // from Scene and Entity; bridges publish dynamic signals and scope keys.
@@ -130,6 +189,12 @@ public:
     UIFlowRuntime& operator=(UIFlowRuntime&&) noexcept;
 
     bool load(ayt::ui::UIFlowDocument document, std::string* error = nullptr);
+    // Transactionally swaps a validated document while preserving compatible
+    // scopes, manual Context handles and region states. Mounted Screens whose
+    // layout or transition metadata changed are replaced before old trees are
+    // retired, so a failed reload leaves the running presentation untouched.
+    bool reload(ayt::ui::UIFlowDocument document,
+                std::string* error = nullptr);
     bool start(std::string_view entry = {}, std::string* error = nullptr);
     void unload() noexcept;
 
@@ -176,6 +241,26 @@ public:
 
     void setGuardEvaluator(UIFlowGuardEvaluator evaluator);
     void setGraphRequestHandler(UIFlowGraphRequestHandler handler);
+    // A Running result installs the execution as pending. Complete it from a
+    // later host callback; do not synchronously call completeGraphExecution()
+    // from inside the start handler before that pending record exists.
+    void setAsyncGraphRequestHandler(
+        UIFlowAsyncGraphRequestHandler handler,
+        UIFlowGraphInterruptHandler interruptHandler = {});
+    bool completeGraphExecution(UIFlowGraphExecutionId executionId,
+                                bool succeeded = true,
+                                std::string message = {},
+                                std::string* error = nullptr);
+    [[nodiscard]] bool hasPendingGraphExecution(
+        std::string_view regionId = {}) const noexcept;
+
+    [[nodiscard]] const std::vector<UIFlowRuntimeTrace>& trace() const noexcept;
+    [[nodiscard]] const std::vector<UIFlowReplaySignal>& replaySignals()
+        const noexcept;
+    void clearTrace() noexcept;
+    void clearReplay() noexcept;
+    bool replay(const std::vector<UIFlowReplaySignal>& signals,
+                std::string* error = nullptr);
 
     [[nodiscard]] std::string_view activeState(
         std::string_view regionId) const noexcept;

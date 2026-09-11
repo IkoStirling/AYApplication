@@ -146,6 +146,22 @@ UIFlowActionResult UIFlowActionResult::failure(std::string message)
     return UIFlowActionResult{false, std::move(message)};
 }
 
+UIFlowGraphStartResult UIFlowGraphStartResult::completed()
+{
+    return {};
+}
+
+UIFlowGraphStartResult UIFlowGraphStartResult::running()
+{
+    return UIFlowGraphStartResult{UIFlowGraphStartState::Running, {}};
+}
+
+UIFlowGraphStartResult UIFlowGraphStartResult::rejected(std::string message)
+{
+    return UIFlowGraphStartResult{
+        UIFlowGraphStartState::Rejected, std::move(message)};
+}
+
 class UIFlowRuntime::Impl
 {
 public:
@@ -188,6 +204,24 @@ public:
         UIFlowSignalHandler handler;
     };
 
+    struct PendingGraphPipeline
+    {
+        std::string regionId;
+        std::string transitionId;
+        ayt::ui::UIFlowInterruptPolicy interruptPolicy =
+            ayt::ui::UIFlowInterruptPolicy::Queue;
+        std::vector<UIFlowGraphRequest> requests;
+        std::size_t nextRequest = 0;
+        UIFlowGraphExecutionId executionId = 0;
+    };
+
+    struct DeferredTransition
+    {
+        std::string regionId;
+        std::string transitionId;
+        QueuedSignal signal;
+    };
+
     void setLastError(std::string value, std::string* output = nullptr)
     {
         lastError = std::move(value);
@@ -198,6 +232,15 @@ public:
     {
         lastError.clear();
         if (output != nullptr) output->clear();
+    }
+
+    void appendTrace(std::string category, std::string id, std::string detail)
+    {
+        constexpr std::size_t maxTraceEntries = 512;
+        if (traces.size() == maxTraceEntries) traces.erase(traces.begin());
+        traces.push_back(UIFlowRuntimeTrace{
+            nextTraceSerial++, std::move(category), std::move(id),
+            std::move(detail)});
     }
 
     const UIFlowContextDefinition* context(std::string_view id) const
@@ -366,14 +409,80 @@ public:
         return true;
     }
 
+    static bool sameValue(
+        const ayt::ui::UIFlowValue& lhs,
+        const ayt::ui::UIFlowValue& rhs)
+    {
+        if (lhs.data.index() != rhs.data.index()) return false;
+        if (const auto* value = std::get_if<std::monostate>(&lhs.data)) {
+            (void)value;
+            return true;
+        }
+        if (const auto* value = std::get_if<bool>(&lhs.data)) {
+            return *value == std::get<bool>(rhs.data);
+        }
+        if (const auto* value = std::get_if<std::int64_t>(&lhs.data)) {
+            return *value == std::get<std::int64_t>(rhs.data);
+        }
+        if (const auto* value = std::get_if<double>(&lhs.data)) {
+            return *value == std::get<double>(rhs.data);
+        }
+        if (const auto* value = std::get_if<std::string>(&lhs.data)) {
+            return *value == std::get<std::string>(rhs.data);
+        }
+        if (const auto* values =
+                std::get_if<ayt::ui::UIFlowValue::Array>(&lhs.data)) {
+            const auto& other =
+                std::get<ayt::ui::UIFlowValue::Array>(rhs.data);
+            if (values->size() != other.size()) return false;
+            for (std::size_t index = 0; index < values->size(); ++index) {
+                if (!sameValue((*values)[index], other[index])) return false;
+            }
+            return true;
+        }
+        const auto& values =
+            std::get<ayt::ui::UIFlowValue::Object>(lhs.data);
+        const auto& other =
+            std::get<ayt::ui::UIFlowValue::Object>(rhs.data);
+        if (values.size() != other.size()) return false;
+        auto left = values.begin();
+        auto right = other.begin();
+        for (; left != values.end(); ++left, ++right) {
+            if (left->first != right->first
+                || !sameValue(left->second, right->second)) return false;
+        }
+        return true;
+    }
+
+    static bool samePayload(
+        const UIFlowPayload& lhs,
+        const UIFlowPayload& rhs)
+    {
+        if (lhs.size() != rhs.size()) return false;
+        for (const auto& pair : lhs) {
+            const auto found = rhs.find(pair.first);
+            if (found == rhs.end() || !sameValue(pair.second, found->second)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     static bool sameMountIdentity(
         const UIFlowMountedScreen& mounted,
         const DesiredScreen& desired)
     {
         return mounted.slotId == desired.slot->id
             && mounted.screenId == desired.screen->id
+            && mounted.layoutAsset == desired.screen->layoutAsset
+            && mounted.layerId == desired.layer->id
             && mounted.scope == desired.screen->scope
-            && mounted.scopeKey == desired.scopeKey;
+            && mounted.scopeKey == desired.scopeKey
+            && mounted.inputPolicy == desired.layer->inputPolicy
+            && mounted.blocksLowerInput == desired.layer->blocksLowerInput
+            && mounted.enterAnimation == desired.screen->enterAnimation
+            && mounted.exitAnimation == desired.screen->exitAnimation
+            && samePayload(mounted.parameters, desired.screen->parameters);
     }
 
     bool reconcile(std::string& error)
@@ -416,6 +525,8 @@ public:
                 request.inputPolicy = item.layer->inputPolicy;
                 request.blocksLowerInput = item.layer->blocksLowerInput;
                 request.orderInLayer = item.orderInLayer;
+                request.enterAnimation = item.screen->enterAnimation;
+                request.exitAnimation = item.screen->exitAnimation;
                 request.parameters = item.screen->parameters;
                 std::string mountError;
                 bool mountedSuccessfully = false;
@@ -437,9 +548,12 @@ public:
                     return false;
                 }
                 newlyMounted.push_back(value.mountId);
+                appendTrace("Screen", item.screen->id,
+                    "mounted on " + item.layer->id + " / " + item.slot->id);
             }
             value.activationSerial = item.activation->serial;
             value.screenId = item.screen->id;
+            value.layoutAsset = item.screen->layoutAsset;
             value.layerId = item.layer->id;
             value.slotId = item.slot->id;
             value.contextId = item.activation->contextId;
@@ -447,11 +561,19 @@ public:
             value.scopeKey = item.scopeKey;
             value.layerOrder = item.layer->order;
             value.orderInLayer = item.orderInLayer;
+            value.inputPolicy = item.layer->inputPolicy;
+            value.blocksLowerInput = item.layer->blocksLowerInput;
+            value.enterAnimation = item.screen->enterAnimation;
+            value.exitAnimation = item.screen->exitAnimation;
+            value.parameters = item.screen->parameters;
             next.push_back(std::move(value));
         }
 
         for (std::size_t index = 0; index < mounted.size(); ++index) {
-            if (!reused[index]) host.unmountScreen(mounted[index].mountId);
+            if (!reused[index]) {
+                appendTrace("Screen", mounted[index].screenId, "unmounted");
+                host.unmountScreen(mounted[index].mountId);
+            }
         }
         mounted = std::move(next);
         for (const UIFlowMountedScreen& value : mounted) {
@@ -550,7 +672,199 @@ public:
         return false;
     }
 
-    bool applyTransition(
+    const ayt::ui::UIFlowTransitionDefinition* transition(
+        std::string_view id) const
+    {
+        const auto found = std::find_if(document.transitions.begin(),
+            document.transitions.end(), [id](const auto& value) {
+                return value.id == id;
+            });
+        return found == document.transitions.end() ? nullptr : &*found;
+    }
+
+    bool dispatchPendingPipeline(std::string_view regionId, std::string& error)
+    {
+        auto found = pendingPipelines.find(std::string(regionId));
+        if (found == pendingPipelines.end()) return true;
+        PendingGraphPipeline& pipeline = found->second;
+        while (pipeline.nextRequest < pipeline.requests.size()) {
+            const UIFlowGraphRequest& graph =
+                pipeline.requests[pipeline.nextRequest];
+            const UIFlowGraphExecutionId executionId = nextGraphExecution++;
+            UIFlowGraphStartResult result;
+            try {
+                result = asyncGraphHandler(UIFlowGraphExecutionRequest{
+                    executionId, graph});
+            } catch (const std::exception& exception) {
+                result = UIFlowGraphStartResult::rejected(exception.what());
+            } catch (...) {
+                result = UIFlowGraphStartResult::rejected(
+                    "graph executor threw an unknown exception");
+            }
+            appendTrace("Graph", graph.graphId,
+                result.state == UIFlowGraphStartState::Running
+                    ? "running" : result.state == UIFlowGraphStartState::Completed
+                        ? "completed" : "rejected");
+            if (result.state == UIFlowGraphStartState::Rejected) {
+                error = "Graph execution rejected for '" + graph.graphId
+                    + "': " + (result.message.empty()
+                        ? std::string("executor rejected the request")
+                        : result.message);
+                const std::string failedRegion = pipeline.regionId;
+                pendingPipelines.erase(found);
+                deferredTransitions.erase(std::remove_if(
+                    deferredTransitions.begin(), deferredTransitions.end(),
+                    [&failedRegion](const DeferredTransition& value) {
+                        return value.regionId == failedRegion;
+                    }), deferredTransitions.end());
+                return false;
+            }
+            ++pipeline.nextRequest;
+            if (result.state == UIFlowGraphStartState::Running) {
+                pipeline.executionId = executionId;
+                executionRegions[executionId] = pipeline.regionId;
+                return true;
+            }
+        }
+        appendTrace("Transition", pipeline.transitionId, "graph pipeline completed");
+        pendingPipelines.erase(found);
+        return drainDeferredTransition(regionId, error);
+    }
+
+    bool drainDeferredTransition(std::string_view regionId, std::string& error)
+    {
+        const auto found = std::find_if(deferredTransitions.begin(),
+            deferredTransitions.end(), [regionId](const auto& value) {
+                return value.regionId == regionId;
+            });
+        if (found == deferredTransitions.end()) return true;
+        DeferredTransition deferred = std::move(*found);
+        deferredTransitions.erase(found);
+        const auto* definition = transition(deferred.transitionId);
+        const auto* region = document.findRegion(deferred.regionId);
+        if (definition == nullptr || region == nullptr) {
+            error = "Deferred UI Flow transition no longer exists.";
+            return false;
+        }
+        return applyTransitionNow(*region, *definition, deferred.signal, error);
+    }
+
+    bool beginGraphPipeline(
+        const UIFlowRegionDefinition& region,
+        const UIFlowTransitionDefinition& transition,
+        const QueuedSignal& signal,
+        const std::vector<const UIFlowStateDefinition*>& oldLineage,
+        const std::vector<const UIFlowStateDefinition*>& newLineage,
+        std::size_t common,
+        std::string& error)
+    {
+        std::vector<UIFlowGraphRequest> requests;
+        auto add = [&](std::string_view graphId) {
+            if (graphId.empty()) return;
+            UIFlowGraphRequest request;
+            request.graphId = std::string(graphId);
+            request.signalId = signal.id;
+            request.payload = signal.payload;
+            request.regionId = region.id;
+            request.transitionId = transition.id;
+            requests.push_back(std::move(request));
+        };
+        for (std::size_t index = oldLineage.size(); index > common; --index) {
+            add(oldLineage[index - 1]->exitGraph);
+        }
+        add(transition.actionGraph);
+        for (std::size_t index = common; index < newLineage.size(); ++index) {
+            add(newLineage[index]->enterGraph);
+        }
+        if (requests.empty()) return true;
+        if (!asyncGraphHandler) {
+            for (const UIFlowGraphRequest& request : requests) {
+                if (!requestGraph(request.graphId, &signal,
+                                  region.id, transition.id, error)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        PendingGraphPipeline pipeline;
+        pipeline.regionId = region.id;
+        pipeline.transitionId = transition.id;
+        pipeline.interruptPolicy = transition.interruptPolicy;
+        pipeline.requests = std::move(requests);
+        pendingPipelines[region.id] = std::move(pipeline);
+        return dispatchPendingPipeline(region.id, error);
+    }
+
+    bool scheduleTransition(
+        const UIFlowRegionDefinition& region,
+        const UIFlowTransitionDefinition& transition,
+        const QueuedSignal& signal,
+        std::string& error)
+    {
+        const auto running = pendingPipelines.find(region.id);
+        if (running == pendingPipelines.end()) {
+            return applyTransitionNow(region, transition, signal, error);
+        }
+        switch (transition.interruptPolicy) {
+        case ayt::ui::UIFlowInterruptPolicy::IgnoreIfRunning:
+            appendTrace("Transition", transition.id, "ignored while region is running");
+            return true;
+        case ayt::ui::UIFlowInterruptPolicy::Queue:
+            deferredTransitions.push_back(
+                DeferredTransition{region.id, transition.id, signal});
+            appendTrace("Transition", transition.id, "queued");
+            return true;
+        case ayt::ui::UIFlowInterruptPolicy::Coalesce: {
+            auto queued = std::find_if(deferredTransitions.rbegin(),
+                deferredTransitions.rend(), [&](const auto& value) {
+                    return value.regionId == region.id;
+                });
+            if (queued == deferredTransitions.rend()) {
+                deferredTransitions.push_back(
+                    DeferredTransition{region.id, transition.id, signal});
+            } else {
+                queued->transitionId = transition.id;
+                queued->signal = signal;
+            }
+            appendTrace("Transition", transition.id, "coalesced");
+            return true;
+        }
+        case ayt::ui::UIFlowInterruptPolicy::CancelPrevious:
+        case ayt::ui::UIFlowInterruptPolicy::ReversePrevious: {
+            const UIFlowGraphExecutionId executionId = running->second.executionId;
+            if (graphInterruptHandler && executionId != 0) {
+                try {
+                    graphInterruptHandler(executionId,
+                        transition.interruptPolicy
+                                == ayt::ui::UIFlowInterruptPolicy::ReversePrevious
+                            ? UIFlowGraphInterrupt::Reverse
+                            : UIFlowGraphInterrupt::Cancel);
+                } catch (const std::exception& exception) {
+                    error = "Graph interrupt handler threw: ";
+                    error += exception.what();
+                    return false;
+                } catch (...) {
+                    error = "Graph interrupt handler threw an unknown exception.";
+                    return false;
+                }
+            }
+            executionRegions.erase(executionId);
+            appendTrace("Graph", std::to_string(executionId),
+                transition.interruptPolicy
+                        == ayt::ui::UIFlowInterruptPolicy::ReversePrevious
+                    ? "reverse requested" : "cancel requested");
+            pendingPipelines.erase(running);
+            deferredTransitions.erase(std::remove_if(
+                deferredTransitions.begin(), deferredTransitions.end(),
+                [&](const auto& value) { return value.regionId == region.id; }),
+                deferredTransitions.end());
+            return applyTransitionNow(region, transition, signal, error);
+        }
+        }
+        return true;
+    }
+
+    bool applyTransitionNow(
         const UIFlowRegionDefinition& region,
         const UIFlowTransitionDefinition& transition,
         const QueuedSignal& signal,
@@ -611,23 +925,10 @@ public:
             return false;
         }
 
-        for (std::size_t index = oldLineage.size(); index > common; --index) {
-            if (!requestGraph(oldLineage[index - 1]->exitGraph, &signal,
-                              region.id, transition.id, error)) {
-                return false;
-            }
-        }
-        if (!requestGraph(transition.actionGraph, &signal,
-                          region.id, transition.id, error)) {
-            return false;
-        }
-        for (std::size_t index = common; index < newLineage.size(); ++index) {
-            if (!requestGraph(newLineage[index]->enterGraph, &signal,
-                              region.id, transition.id, error)) {
-                return false;
-            }
-        }
-        return true;
+        appendTrace("Transition", transition.id,
+            oldLeaf + " -> " + newLeaf);
+        return beginGraphPipeline(region, transition, signal,
+                                  oldLineage, newLineage, common, error);
     }
 
     bool processSignal(const QueuedSignal& signal, std::string& error)
@@ -687,7 +988,7 @@ public:
                 }
             }
             if (selected != nullptr
-                && !applyTransition(region, *selected, signal, error)) {
+                && !scheduleTransition(region, *selected, signal, error)) {
                 valid = false;
             }
         }
@@ -725,12 +1026,23 @@ public:
     std::unordered_map<std::string, UIFlowActionHandler> actions;
     UIFlowGuardEvaluator guardEvaluator;
     UIFlowGraphRequestHandler graphHandler;
+    UIFlowAsyncGraphRequestHandler asyncGraphHandler;
+    UIFlowGraphInterruptHandler graphInterruptHandler;
+    std::unordered_map<std::string, PendingGraphPipeline> pendingPipelines;
+    std::unordered_map<UIFlowGraphExecutionId, std::string> executionRegions;
+    std::deque<DeferredTransition> deferredTransitions;
+    std::vector<UIFlowRuntimeTrace> traces;
+    std::vector<UIFlowReplaySignal> replayLog;
     std::uint64_t nextContextHandle = 1;
     std::uint64_t nextActivationSerial = 1;
     std::uint64_t nextMountId = 1;
     std::uint64_t nextSubscription = 1;
+    std::uint64_t nextGraphExecution = 1;
+    std::uint64_t nextTraceSerial = 1;
     bool dispatchingSignals = false;
+    bool replaying = false;
     std::string lastError;
+    std::string activeEntryId;
 };
 
 UIFlowRuntime::UIFlowRuntime(IUIFlowScreenHost& screenHost)
@@ -777,6 +1089,108 @@ bool UIFlowRuntime::load(
     return true;
 }
 
+bool UIFlowRuntime::reload(
+    ayt::ui::UIFlowDocument document,
+    std::string* error)
+{
+    if (!_impl->loaded) return load(std::move(document), error);
+    std::vector<ayt::ui::UIFlowDiagnostic> diagnostics;
+    if (!ayt::ui::validateUIFlow(document, &diagnostics)) {
+        const std::string message = diagnostics.empty()
+            ? "UI Flow reload validation failed."
+            : (diagnostics.front().path.empty() ? std::string{}
+                                                : diagnostics.front().path + ": ")
+                + diagnostics.front().message;
+        _impl->setLastError(message, error);
+        _impl->appendTrace("Reload", _impl->document.id, "rejected: " + message);
+        return false;
+    }
+    if (!_impl->pendingPipelines.empty()) {
+        _impl->setLastError(
+            "UI Flow cannot reload while an asynchronous graph is running.",
+            error);
+        return false;
+    }
+
+    const auto oldDocument = _impl->document;
+    const auto oldContexts = _impl->activeContexts;
+    const auto oldFloors = _impl->restoreFloors;
+    const auto oldStates = _impl->regionStates;
+    const std::string oldEntryId = _impl->activeEntryId;
+    const std::uint64_t oldNextHandle = _impl->nextContextHandle;
+    const std::uint64_t oldNextSerial = _impl->nextActivationSerial;
+
+    _impl->document = std::move(document);
+    _impl->activeContexts.erase(std::remove_if(
+        _impl->activeContexts.begin(), _impl->activeContexts.end(),
+        [&](const Impl::ActiveContext& value) {
+            return !value.manual || _impl->document.findContext(value.contextId) == nullptr;
+        }), _impl->activeContexts.end());
+    for (Impl::ActiveContext& value : _impl->activeContexts) {
+        value.priority = _impl->document.findContext(value.contextId)->priority;
+    }
+    std::string nextEntryId = oldEntryId;
+    const ayt::ui::UIFlowEntryDefinition* nextEntry = nextEntryId.empty()
+        ? nullptr : _impl->document.findEntry(nextEntryId);
+    if (_impl->started && nextEntry == nullptr) {
+        nextEntryId = _impl->document.defaultEntry;
+        nextEntry = nextEntryId.empty()
+            ? nullptr : _impl->document.findEntry(nextEntryId);
+    }
+    if (_impl->started && nextEntry != nullptr) {
+        for (const std::string& contextId : nextEntry->contexts) {
+            _impl->addContext(
+                contextId,
+                UIFlowScopeBinding{UIFlowScope::Application, "application"},
+                "entry:" + nextEntry->id,
+                false);
+        }
+    }
+    _impl->regionStates.clear();
+    if (_impl->started) {
+        for (const ayt::ui::UIFlowRegionDefinition& region
+             : _impl->document.regions) {
+            std::string leaf = descendInitialState(region, region.initialState);
+            const auto preserved = oldStates.find(region.id);
+            if (preserved != oldStates.end()
+                && findState(region, preserved->second) != nullptr) {
+                leaf = preserved->second;
+            }
+            _impl->regionStates[region.id] = leaf;
+            _impl->addStateContexts(region, leaf);
+        }
+    }
+    for (auto it = _impl->restoreFloors.begin();
+         it != _impl->restoreFloors.end();) {
+        if (_impl->document.findSlot(it->first) == nullptr) {
+            it = _impl->restoreFloors.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    std::string reconcileError;
+    if (!_impl->reconcile(reconcileError)) {
+        _impl->document = oldDocument;
+        _impl->activeContexts = oldContexts;
+        _impl->restoreFloors = oldFloors;
+        _impl->regionStates = oldStates;
+        _impl->activeEntryId = oldEntryId;
+        _impl->nextContextHandle = oldNextHandle;
+        _impl->nextActivationSerial = oldNextSerial;
+        std::string ignored;
+        (void)_impl->reconcile(ignored);
+        _impl->setLastError(std::move(reconcileError), error);
+        _impl->appendTrace("Reload", oldDocument.id, "rolled back");
+        return false;
+    }
+    _impl->activeEntryId = std::move(nextEntryId);
+    _impl->appendTrace("Reload", _impl->document.id,
+        "committed with compatible runtime state");
+    _impl->clearLastError(error);
+    return true;
+}
+
 bool UIFlowRuntime::start(std::string_view entry, std::string* error)
 {
     if (!_impl->loaded) {
@@ -805,6 +1219,7 @@ bool UIFlowRuntime::start(std::string_view entry, std::string* error)
     const auto oldStates = _impl->regionStates;
     const auto oldSignals = _impl->signalQueue;
     const bool oldStarted = _impl->started;
+    const std::string oldEntryId = _impl->activeEntryId;
     const std::uint64_t oldNextHandle = _impl->nextContextHandle;
     const std::uint64_t oldNextSerial = _impl->nextActivationSerial;
 
@@ -838,6 +1253,7 @@ bool UIFlowRuntime::start(std::string_view entry, std::string* error)
         _impl->regionStates = oldStates;
         _impl->signalQueue = oldSignals;
         _impl->started = oldStarted;
+        _impl->activeEntryId = oldEntryId;
         _impl->nextContextHandle = oldNextHandle;
         _impl->nextActivationSerial = oldNextSerial;
         std::string ignored;
@@ -846,6 +1262,7 @@ bool UIFlowRuntime::start(std::string_view entry, std::string* error)
         return false;
     }
     _impl->started = true;
+    _impl->activeEntryId = entryId;
     std::string graphError;
     if (entryDefinition != nullptr) {
         if (!_impl->requestGraph(
@@ -871,6 +1288,17 @@ bool UIFlowRuntime::start(std::string_view entry, std::string* error)
 void UIFlowRuntime::unload() noexcept
 {
     if (!_impl) return;
+    if (_impl->graphInterruptHandler) {
+        for (const auto& value : _impl->pendingPipelines) {
+            if (value.second.executionId != 0) {
+                try {
+                    _impl->graphInterruptHandler(
+                        value.second.executionId, UIFlowGraphInterrupt::Cancel);
+                } catch (...) {
+                }
+            }
+        }
+    }
     _impl->unmountAll();
     _impl->document = {};
     _impl->activeContexts.clear();
@@ -878,10 +1306,14 @@ void UIFlowRuntime::unload() noexcept
     _impl->regionStates.clear();
     _impl->scopeKeys.clear();
     _impl->signalQueue.clear();
+    _impl->pendingPipelines.clear();
+    _impl->executionRegions.clear();
+    _impl->deferredTransitions.clear();
     _impl->loaded = false;
     _impl->started = false;
     _impl->dispatchingSignals = false;
     _impl->lastError.clear();
+    _impl->activeEntryId.clear();
 }
 
 bool UIFlowRuntime::isLoaded() const noexcept
@@ -1114,6 +1546,11 @@ bool UIFlowRuntime::emitSignal(
     }
     _impl->signalQueue.push_back(
         Impl::QueuedSignal{std::string(signalId), std::move(normalized)});
+    _impl->appendTrace("Signal", std::string(signalId), "accepted");
+    if (!_impl->replaying) {
+        _impl->replayLog.push_back(UIFlowReplaySignal{
+            std::string(signalId), _impl->signalQueue.back().payload});
+    }
     if (_impl->dispatchingSignals) {
         _impl->clearLastError(error);
         return true;
@@ -1229,6 +1666,116 @@ void UIFlowRuntime::setGuardEvaluator(UIFlowGuardEvaluator evaluator)
 void UIFlowRuntime::setGraphRequestHandler(UIFlowGraphRequestHandler handler)
 {
     _impl->graphHandler = std::move(handler);
+}
+
+void UIFlowRuntime::setAsyncGraphRequestHandler(
+    UIFlowAsyncGraphRequestHandler handler,
+    UIFlowGraphInterruptHandler interruptHandler)
+{
+    _impl->asyncGraphHandler = std::move(handler);
+    _impl->graphInterruptHandler = std::move(interruptHandler);
+}
+
+bool UIFlowRuntime::completeGraphExecution(
+    UIFlowGraphExecutionId executionId,
+    bool succeeded,
+    std::string message,
+    std::string* error)
+{
+    const auto regionFound = _impl->executionRegions.find(executionId);
+    if (regionFound == _impl->executionRegions.end()) {
+        _impl->setLastError("Unknown UI Flow graph execution.", error);
+        return false;
+    }
+    const std::string regionId = regionFound->second;
+    _impl->executionRegions.erase(regionFound);
+    const auto pipeline = _impl->pendingPipelines.find(regionId);
+    if (pipeline == _impl->pendingPipelines.end()
+        || pipeline->second.executionId != executionId) {
+        _impl->setLastError("UI Flow graph execution is no longer active.", error);
+        return false;
+    }
+    pipeline->second.executionId = 0;
+    if (!succeeded) {
+        _impl->appendTrace("Graph", std::to_string(executionId),
+            "failed: " + message);
+        _impl->pendingPipelines.erase(pipeline);
+        std::string drainError;
+        if (!_impl->drainDeferredTransition(regionId, drainError)) {
+            _impl->setLastError(std::move(drainError), error);
+            return false;
+        }
+        _impl->setLastError(message.empty()
+            ? "UI Flow graph execution failed." : std::move(message), error);
+        return false;
+    }
+    _impl->appendTrace("Graph", std::to_string(executionId), "completed");
+    std::string dispatchError;
+    if (!_impl->dispatchPendingPipeline(regionId, dispatchError)) {
+        _impl->setLastError(std::move(dispatchError), error);
+        return false;
+    }
+    _impl->clearLastError(error);
+    return true;
+}
+
+bool UIFlowRuntime::hasPendingGraphExecution(
+    std::string_view regionId) const noexcept
+{
+    if (regionId.empty()) return !_impl->pendingPipelines.empty();
+    return _impl->pendingPipelines.find(std::string(regionId))
+        != _impl->pendingPipelines.end();
+}
+
+const std::vector<UIFlowRuntimeTrace>& UIFlowRuntime::trace() const noexcept
+{
+    return _impl->traces;
+}
+
+const std::vector<UIFlowReplaySignal>&
+UIFlowRuntime::replaySignals() const noexcept
+{
+    return _impl->replayLog;
+}
+
+void UIFlowRuntime::clearTrace() noexcept
+{
+    _impl->traces.clear();
+}
+
+void UIFlowRuntime::clearReplay() noexcept
+{
+    _impl->replayLog.clear();
+}
+
+bool UIFlowRuntime::replay(
+    const std::vector<UIFlowReplaySignal>& signals,
+    std::string* error)
+{
+    if (!_impl->started || _impl->dispatchingSignals) {
+        _impl->setLastError(!_impl->started
+            ? "UI Flow is not started."
+            : "UI Flow cannot replay during signal dispatch.", error);
+        return false;
+    }
+    _impl->replaying = true;
+    bool accepted = true;
+    std::string replayError;
+    for (const UIFlowReplaySignal& signal : signals) {
+        if (!emitSignal(signal.signalId, signal.payload, &replayError)) {
+            accepted = false;
+            break;
+        }
+    }
+    _impl->replaying = false;
+    if (!accepted) {
+        _impl->setLastError(std::move(replayError), error);
+        return false;
+    }
+    _impl->appendTrace("Replay", std::to_string(signals.size()),
+        "signals completed");
+    _impl->clearLastError(error);
+    return true;
 }
 
 std::string_view UIFlowRuntime::activeState(

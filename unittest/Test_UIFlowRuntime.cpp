@@ -1,6 +1,7 @@
 #include <AYApplication/UIFlowRuntime.h>
 #include <AYApplication/UIManagerFlowScreenHost.h>
 #include <AYTest.h>
+#include <AYUI/Animation.h>
 #include <AYUI/UIManager.h>
 
 #include <algorithm>
@@ -231,6 +232,41 @@ bool containsScreen(
         [&id](const UIFlowMountedScreen& screen) {
             return screen.screenId == id;
         });
+}
+
+UIFlowDocument asynchronousDocument(UIFlowInterruptPolicy nextPolicy)
+{
+    UIFlowDocument document;
+    document.id = "async-runtime";
+    document.signals = {
+        UIFlowSignalDefinition{"go", {}},
+        UIFlowSignalDefinition{"next", {}},
+        UIFlowSignalDefinition{"skip", {}},
+    };
+    document.graphs = {
+        UIFlowGraphDefinition{"graph.go"},
+        UIFlowGraphDefinition{"graph.next"},
+        UIFlowGraphDefinition{"graph.skip"},
+    };
+    document.regions.push_back(UIFlowRegionDefinition{
+        "main", "a", {
+            UIFlowStateDefinition{"a"},
+            UIFlowStateDefinition{"b"},
+            UIFlowStateDefinition{"c"},
+            UIFlowStateDefinition{"d"},
+        }});
+    document.transitions = {
+        UIFlowTransitionDefinition{
+            "go", "main", "a", "b", "go", {}, "graph.go", 0,
+            UIFlowInterruptPolicy::Queue},
+        UIFlowTransitionDefinition{
+            "next", "main", "b", "c", "next", {}, "graph.next", 0,
+            nextPolicy},
+        UIFlowTransitionDefinition{
+            "skip", "main", "b", "d", "skip", {}, "graph.skip", 0,
+            nextPolicy},
+    };
+    return document;
 }
 
 } // namespace
@@ -646,6 +682,318 @@ TEST_CASE(ui_manager_root_replacement_does_not_double_destroy_flow_widgets)
     }
     CHECK(manager.root() != nullptr);
     CHECK(manager.root()->getId() == "replacement");
+}
+
+TEST_CASE(async_graph_queue_defers_transition_until_completion)
+{
+    RecordingScreenHost host;
+    UIFlowRuntime runtime(host);
+    std::vector<UIFlowGraphExecutionId> executions;
+    runtime.setAsyncGraphRequestHandler(
+        [&executions](const UIFlowGraphExecutionRequest& request) {
+            executions.push_back(request.executionId);
+            return UIFlowGraphStartResult::running();
+        });
+    CHECK(runtime.load(asynchronousDocument(UIFlowInterruptPolicy::Queue)));
+    CHECK(runtime.start());
+    CHECK(runtime.emitSignal("go"));
+    CHECK(runtime.activeState("main") == "b");
+    CHECK(runtime.hasPendingGraphExecution("main"));
+    CHECK(runtime.emitSignal("next"));
+    CHECK(runtime.activeState("main") == "b");
+    CHECK(executions.size() == 1u);
+    std::string reloadError;
+    CHECK_FALSE(runtime.reload(
+        asynchronousDocument(UIFlowInterruptPolicy::Queue), &reloadError));
+    CHECK(reloadError.find("asynchronous graph") != std::string::npos);
+    if (executions.size() != 1u) return;
+    CHECK(runtime.completeGraphExecution(executions[0]));
+    CHECK(runtime.activeState("main") == "c");
+    CHECK(runtime.hasPendingGraphExecution("main"));
+    CHECK(executions.size() == 2u);
+    if (executions.size() != 2u) return;
+    CHECK(runtime.completeGraphExecution(executions[1]));
+    CHECK_FALSE(runtime.hasPendingGraphExecution());
+}
+
+TEST_CASE(async_graph_coalesce_keeps_latest_and_ignore_drops_deferred_transition)
+{
+    for (const UIFlowInterruptPolicy policy : {
+             UIFlowInterruptPolicy::Coalesce,
+             UIFlowInterruptPolicy::IgnoreIfRunning}) {
+        RecordingScreenHost host;
+        std::vector<UIFlowGraphExecutionId> executions;
+        UIFlowRuntime runtime(host);
+        runtime.setAsyncGraphRequestHandler(
+            [&](const UIFlowGraphExecutionRequest& request) {
+                executions.push_back(request.executionId);
+                return UIFlowGraphStartResult::running();
+            });
+        CHECK(runtime.load(asynchronousDocument(policy)));
+        CHECK(runtime.start());
+        CHECK(runtime.emitSignal("go"));
+        CHECK(runtime.emitSignal("next"));
+        CHECK(runtime.emitSignal("skip"));
+        CHECK(executions.size() == 1u);
+        if (executions.empty()) return;
+        CHECK(runtime.completeGraphExecution(executions.front()));
+        if (policy == UIFlowInterruptPolicy::Coalesce) {
+            CHECK(runtime.activeState("main") == "d");
+            CHECK(executions.size() == 2u);
+            CHECK(runtime.completeGraphExecution(executions.back()));
+        } else {
+            CHECK(runtime.activeState("main") == "b");
+            CHECK(executions.size() == 1u);
+        }
+        CHECK_FALSE(runtime.hasPendingGraphExecution());
+    }
+}
+
+TEST_CASE(async_graph_rejection_discards_stale_deferred_region_work)
+{
+    RecordingScreenHost host;
+    UIFlowDocument document =
+        asynchronousDocument(UIFlowInterruptPolicy::Queue);
+    document.signals.push_back(UIFlowSignalDefinition{"reset", {}});
+    document.graphs.push_back(UIFlowGraphDefinition{"graph.reset"});
+    document.transitions.push_back(UIFlowTransitionDefinition{
+        "reset", "main", "c", "a", "reset", {}, "graph.reset", 0,
+        UIFlowInterruptPolicy::Queue});
+
+    std::vector<UIFlowGraphExecutionId> executions;
+    UIFlowRuntime runtime(host);
+    runtime.setAsyncGraphRequestHandler(
+        [&](const UIFlowGraphExecutionRequest& request) {
+            if (request.graph.graphId == "graph.next") {
+                return UIFlowGraphStartResult::rejected("test rejection");
+            }
+            executions.push_back(request.executionId);
+            return UIFlowGraphStartResult::running();
+        });
+    CHECK(runtime.load(std::move(document)));
+    CHECK(runtime.start());
+    CHECK(runtime.emitSignal("go"));
+    CHECK(runtime.emitSignal("next"));
+    CHECK(runtime.emitSignal("skip"));
+    CHECK(executions.size() == 1u);
+    if (executions.empty()) return;
+
+    std::string error;
+    CHECK_FALSE(runtime.completeGraphExecution(executions.front(), true, {}, &error));
+    CHECK(error.find("test rejection") != std::string::npos);
+    CHECK(runtime.activeState("main") == "c");
+    CHECK_FALSE(runtime.hasPendingGraphExecution());
+
+    CHECK(runtime.emitSignal("reset"));
+    CHECK(executions.size() == 2u);
+    CHECK(runtime.completeGraphExecution(executions.back()));
+    CHECK(runtime.activeState("main") == "a");
+    CHECK_FALSE(runtime.hasPendingGraphExecution());
+}
+
+TEST_CASE(async_graph_pipeline_waits_for_exit_transition_and_enter_in_order)
+{
+    RecordingScreenHost host;
+    UIFlowDocument document =
+        asynchronousDocument(UIFlowInterruptPolicy::Queue);
+    document.graphs.push_back(UIFlowGraphDefinition{"graph.exit"});
+    document.graphs.push_back(UIFlowGraphDefinition{"graph.enter"});
+    document.regions.front().states[0].exitGraph = "graph.exit";
+    document.regions.front().states[1].enterGraph = "graph.enter";
+    std::vector<std::pair<UIFlowGraphExecutionId, std::string>> executions;
+    UIFlowRuntime runtime(host);
+    runtime.setAsyncGraphRequestHandler(
+        [&](const UIFlowGraphExecutionRequest& request) {
+            executions.emplace_back(
+                request.executionId, request.graph.graphId);
+            return UIFlowGraphStartResult::running();
+        });
+    CHECK(runtime.load(std::move(document)));
+    CHECK(runtime.start());
+    CHECK(runtime.emitSignal("go"));
+    CHECK(executions.size() == 1u);
+    if (executions.size() != 1u) return;
+    CHECK(executions[0].second == "graph.exit");
+    CHECK(runtime.completeGraphExecution(executions[0].first));
+    CHECK(executions.size() == 2u);
+    if (executions.size() != 2u) return;
+    CHECK(executions[1].second == "graph.go");
+    CHECK(runtime.completeGraphExecution(executions[1].first));
+    CHECK(executions.size() == 3u);
+    if (executions.size() != 3u) return;
+    CHECK(executions[2].second == "graph.enter");
+    CHECK(runtime.completeGraphExecution(executions[2].first));
+    CHECK_FALSE(runtime.hasPendingGraphExecution());
+}
+
+TEST_CASE(async_graph_cancel_and_reverse_interrupt_running_execution)
+{
+    for (const UIFlowInterruptPolicy policy : {
+             UIFlowInterruptPolicy::CancelPrevious,
+             UIFlowInterruptPolicy::ReversePrevious}) {
+        RecordingScreenHost host;
+        std::vector<UIFlowGraphExecutionId> executions;
+        std::vector<UIFlowGraphInterrupt> interrupts;
+        // Callback capture storage must outlive the runtime, whose destructor
+        // cancels any still-running host graph execution.
+        UIFlowRuntime runtime(host);
+        runtime.setAsyncGraphRequestHandler(
+            [&executions](const UIFlowGraphExecutionRequest& request) {
+                executions.push_back(request.executionId);
+                return UIFlowGraphStartResult::running();
+            },
+            [&interrupts](UIFlowGraphExecutionId, UIFlowGraphInterrupt value) {
+                interrupts.push_back(value);
+            });
+        CHECK(runtime.load(asynchronousDocument(policy)));
+        CHECK(runtime.start());
+        CHECK(runtime.emitSignal("go"));
+        CHECK(runtime.emitSignal("next"));
+        CHECK(runtime.activeState("main") == "c");
+        CHECK(interrupts.size() == 1u);
+        CHECK(interrupts[0] == (policy == UIFlowInterruptPolicy::ReversePrevious
+            ? UIFlowGraphInterrupt::Reverse : UIFlowGraphInterrupt::Cancel));
+        CHECK(executions.size() == 2u);
+    }
+}
+
+TEST_CASE(reload_preserves_compatible_manual_context_and_replaces_changed_screen)
+{
+    RecordingScreenHost host;
+    UIFlowRuntime runtime(host);
+    UIFlowDocument document = arbitrationDocument();
+    CHECK(runtime.load(document));
+    CHECK(runtime.start());
+    const UIFlowContextHandle pause = runtime.activateContext("Pause");
+    CHECK(pause != 0u);
+    if (pause == 0u) return;
+    const std::uint64_t oldMount = runtime.mountedScreens().front().mountId;
+    document.screens[1].layoutAsset = "pause-v2.ui.json";
+    host.events.clear();
+    CHECK(runtime.reload(std::move(document)));
+    CHECK(runtime.mountedScreens().front().screenId == "pause");
+    CHECK(runtime.mountedScreens().front().layoutAsset == "pause-v2.ui.json");
+    CHECK(runtime.mountedScreens().front().mountId != oldMount);
+    CHECK(runtime.deactivateContext(pause));
+    CHECK(runtime.mountedScreens().size() == 1u);
+    CHECK(runtime.mountedScreens().front().screenId == "menu");
+    CHECK_FALSE(runtime.trace().empty());
+}
+
+TEST_CASE(async_graph_interrupt_exceptions_are_contained)
+{
+    RecordingScreenHost host;
+    std::vector<UIFlowGraphExecutionId> executions;
+    UIFlowRuntime runtime(host);
+    CHECK(runtime.load(asynchronousDocument(
+        UIFlowInterruptPolicy::CancelPrevious)));
+    runtime.setAsyncGraphRequestHandler(
+        [&](const UIFlowGraphExecutionRequest& request) {
+            executions.push_back(request.executionId);
+            return UIFlowGraphStartResult::running();
+        },
+        [](UIFlowGraphExecutionId, UIFlowGraphInterrupt) {
+            throw std::runtime_error("interrupt fault");
+        });
+    CHECK(runtime.start());
+    CHECK(runtime.emitSignal("go"));
+    std::string error;
+    CHECK_FALSE(runtime.emitSignal("next", {}, &error));
+    CHECK(error.find("interrupt fault") != std::string::npos);
+    CHECK(runtime.activeState("main") == "b");
+    CHECK(runtime.hasPendingGraphExecution("main"));
+    CHECK(executions.size() == 1u);
+    CHECK(runtime.completeGraphExecution(executions.front()));
+}
+
+TEST_CASE(replay_reproduces_signal_sequence_without_recording_it_twice)
+{
+    RecordingScreenHost sourceHost;
+    UIFlowRuntime source(sourceHost);
+    CHECK(source.load(asynchronousDocument(UIFlowInterruptPolicy::Queue)));
+    CHECK(source.start());
+    CHECK(source.emitSignal("go"));
+    const auto recording = source.replaySignals();
+    CHECK(recording.size() == 1u);
+    if (recording.size() != 1u) return;
+
+    RecordingScreenHost targetHost;
+    UIFlowRuntime target(targetHost);
+    CHECK(target.load(asynchronousDocument(UIFlowInterruptPolicy::Queue)));
+    CHECK(target.start());
+    CHECK(target.replay(recording));
+    CHECK(target.activeState("main") == "b");
+    CHECK(target.replaySignals().empty());
+}
+
+TEST_CASE(consume_handled_retries_lower_target_and_block_lower_stops_retry)
+{
+    ayt::ui::UIManager manager;
+    manager.initialize(nullptr);
+    manager.setClientSize(800.0f, 450.0f);
+    MouseProbeWidget lower;
+    lower.setPosition({600.0f, 340.0f});
+    lower.setSize({120.0f, 80.0f});
+    manager.root()->addChildExternal(&lower);
+
+    UIManagerFlowScreenHost host(manager, AY_APPLICATION_UI_TEST_ASSET_ROOT);
+    UIFlowScreenMountRequest request;
+    request.mountId = 40;
+    request.screenId = "retry";
+    request.layoutAsset = "ui_flow_screen.ui.json";
+    request.layerId = "hud";
+    request.slotId = "hud.main";
+    request.inputPolicy = UIFlowInputPolicy::ConsumeHandled;
+    std::string error;
+    CHECK(host.mountScreen(request, error));
+    CHECK(manager.onMouseButtonDown(640.0f, 380.0f, 0));
+    CHECK(lower.pressed);
+
+    lower.pressed = false;
+    host.unmountScreen(40);
+    request.mountId = 41;
+    request.inputPolicy = UIFlowInputPolicy::BlockLower;
+    CHECK(host.mountScreen(request, error));
+    CHECK(manager.onMouseButtonDown(640.0f, 380.0f, 0));
+    CHECK_FALSE(lower.pressed);
+}
+
+TEST_CASE(screen_host_hands_off_enter_exit_animation_and_reduced_motion)
+{
+    ayt::ui::AnimationSettings::get().reset();
+    ayt::ui::UIManager manager;
+    manager.initialize(nullptr);
+    manager.setClientSize(800.0f, 450.0f);
+    UIManagerFlowScreenHost host(manager, AY_APPLICATION_UI_TEST_ASSET_ROOT);
+    UIFlowScreenMountRequest request;
+    request.mountId = 50;
+    request.screenId = "animated";
+    request.layoutAsset = "ui_flow_screen.ui.json";
+    request.layerId = "main";
+    request.slotId = "main.content";
+    request.enterAnimation = "flow.enter";
+    request.exitAnimation = "flow.exit";
+    std::string error;
+    CHECK(host.mountScreen(request, error));
+    CHECK(host.screenRoot(50) != nullptr);
+    if (host.screenRoot(50) == nullptr) return;
+    CHECK(host.screenRoot(50)->getOpacity() < 1.0f);
+    host.update(0.2f);
+    CHECK(host.screenRoot(50)->getOpacity() == 1.0f);
+    host.unmountScreen(50);
+    CHECK(host.isScreenRetiring(50));
+    host.update(0.2f);
+    CHECK_FALSE(host.isScreenRetiring(50));
+
+    ayt::ui::AnimationSettings::get().setReducedMotion(true);
+    request.mountId = 51;
+    CHECK(host.mountScreen(request, error));
+    CHECK(host.screenRoot(51) != nullptr);
+    if (host.screenRoot(51) == nullptr) return;
+    CHECK(host.screenRoot(51)->getOpacity() == 1.0f);
+    host.unmountScreen(51);
+    CHECK_FALSE(host.isScreenRetiring(51));
+    ayt::ui::AnimationSettings::get().reset();
 }
 
 TEST_SUITE_END

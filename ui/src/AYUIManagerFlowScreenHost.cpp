@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
@@ -23,6 +24,22 @@ public:
     ayt::ui::UIFlowInputPolicy inputPolicy =
         ayt::ui::UIFlowInputPolicy::ConsumeHandled;
     bool blocksLowerInput = false;
+
+    bool retriesUnhandledPointerWithinChildren() const override
+    {
+        return !blocksLowerPointerInput();
+    }
+
+    bool allowsUnhandledPointerRetryBehind() const override
+    {
+        return !blocksLowerPointerInput();
+    }
+
+    bool blocksLowerPointerInput() const override
+    {
+        return blocksLowerInput
+            || inputPolicy == ayt::ui::UIFlowInputPolicy::BlockLower;
+    }
 
     ayt::ui::Widget* hitTest(const math::FVector2& worldPos) override
     {
@@ -62,6 +79,9 @@ public:
 class FlowRootWidget final : public ayt::ui::CompoundWidget
 {
 public:
+    bool retriesUnhandledPointerWithinChildren() const override { return true; }
+    bool allowsUnhandledPointerRetryBehind() const override { return true; }
+
     ayt::ui::Widget* hitTest(const math::FVector2& worldPos) override
     {
         if (!isVisible() || !getWorldBounds().contains(worldPos)) {
@@ -109,10 +129,12 @@ public:
         std::unique_ptr<ayt::ui::UILayoutLoader> loader;
         ayt::ui::Widget* root = nullptr;
         LayerRecord* layer = nullptr;
+        std::optional<ayt::ui::AnimationTimeline> animation;
     };
 
-    explicit Impl(ayt::ui::UIManager& value, std::string root)
-        : manager(value), assetRoot(std::move(root))
+    explicit Impl(ayt::ui::UIManager& value, std::string root,
+                  ayt::ui::Widget* parent)
+        : manager(value), assetRoot(std::move(root)), mountParent(parent)
     {
     }
 
@@ -123,7 +145,9 @@ public:
 
     bool ensureRoot(std::string& error)
     {
-        if (manager.root() == nullptr) {
+        ayt::ui::Widget* parent = mountParent != nullptr
+            ? mountParent : manager.root();
+        if (parent == nullptr) {
             error = "UIManager must be initialized before UI Flow mounting.";
             return false;
         }
@@ -133,18 +157,24 @@ public:
             flowRoot->setLayoutPositionManaged(false);
             flowRoot->setLayoutSizeManaged(false);
             flowRoot->setPosition(math::FVector2(0.0f, 0.0f));
-            flowRoot->setSize(manager.getClientSize());
+            flowRoot->setSize(viewportSize());
         }
 
         // UIManager owns and may replace its document root. The Flow host
         // owns this orchestration subtree, so attach it as an external child:
         // root teardown safely detaches it instead of deleting it. A later
         // update can then reattach the same mounted Screens to the new root.
-        if (flowRoot->getParent() != manager.root()) {
-            manager.root()->addChildExternal(flowRoot);
+        if (flowRoot->getParent() != parent) {
+            parent->addChildExternal(flowRoot);
             lastViewport = math::FVector2(-1.0f, -1.0f);
         }
         return true;
+    }
+
+    math::FVector2 viewportSize() const
+    {
+        return mountParent != nullptr
+            ? mountParent->getSize() : manager.getClientSize();
     }
 
     std::filesystem::path resolveAsset(
@@ -209,7 +239,7 @@ public:
         value->widget->setLayoutPositionManaged(false);
         value->widget->setLayoutSizeManaged(false);
         value->widget->setPosition(math::FVector2(0.0f, 0.0f));
-        value->widget->setSize(manager.getClientSize());
+        value->widget->setSize(viewportSize());
         flowRoot->addChild(value->widget);
         LayerRecord* raw = value.get();
         layers.emplace(request.layerId, std::move(value));
@@ -256,7 +286,7 @@ public:
     void resizeWidgetTree(ayt::ui::Widget* root)
     {
         if (root == nullptr) return;
-        const math::FVector2 viewport = manager.getClientSize();
+        const math::FVector2 viewport = viewportSize();
         // A mounted document root has the same viewport contract as a root
         // loaded directly by UIManager: authored root position/size are a
         // design-time canvas, while runtime Screens always fill the host.
@@ -267,10 +297,11 @@ public:
 
     void syncViewport()
     {
-        if (flowRoot == nullptr || manager.root() == nullptr) return;
+        if (flowRoot == nullptr
+            || (mountParent == nullptr && manager.root() == nullptr)) return;
         std::string error;
         if (!ensureRoot(error)) return;
-        const math::FVector2 viewport = manager.getClientSize();
+        const math::FVector2 viewport = viewportSize();
         if (viewport.x == lastViewport.x && viewport.y == lastViewport.y) {
             return;
         }
@@ -278,6 +309,9 @@ public:
         flowRoot->setSize(viewport);
         for (auto& pair : layers) pair.second->widget->setSize(viewport);
         for (auto& pair : mounts) resizeWidgetTree(pair.second.root);
+        for (MountRecord& retiring : retiringMounts) {
+            resizeWidgetTree(retiring.root);
+        }
         manager.invalidateLayout();
     }
 
@@ -287,6 +321,10 @@ public:
         for (const auto& pair : mounts) {
             if (pair.second.layer == layer) return;
         }
+        for (const MountRecord& retiring : retiringMounts) {
+            if (retiring.layer == layer) return;
+        }
+        manager.clearTransientStateForSubtree(layer->widget);
         ayt::ui::destroyWidgetTree(layer->widget);
         layers.erase(layer->id);
     }
@@ -299,10 +337,12 @@ public:
         if (flowRoot != nullptr) {
             // Detach first so addChildExternal's host-owned flag is cleared;
             // destroyWidgetTree can then delete the host-owned root itself.
+            manager.clearTransientStateForSubtree(flowRoot);
             flowRoot->detachFromParent();
             ayt::ui::destroyWidgetTree(flowRoot);
             flowRoot = nullptr;
         }
+        retiringMounts.clear();
         layers.clear();
     }
 
@@ -311,6 +351,20 @@ public:
         const auto found = mounts.find(mountId);
         if (found == mounts.end()) return;
         LayerRecord* layer = found->second.layer;
+        if (!found->second.request.exitAnimation.empty()) {
+            ayt::ui::AnimationTimeline timeline =
+                found->second.loader->createAnimationTimeline(
+                    found->second.request.exitAnimation);
+            timeline.play();
+            if (timeline.isRunning()) {
+                found->second.animation.emplace(std::move(timeline));
+                retiringMounts.push_back(std::move(found->second));
+                mounts.erase(found);
+                manager.invalidateLayout();
+                return;
+            }
+        }
+        manager.clearTransientStateForSubtree(found->second.root);
         ayt::ui::destroyWidgetTree(found->second.root);
         mounts.erase(found);
         removeUnusedLayer(layer);
@@ -319,17 +373,21 @@ public:
 
     ayt::ui::UIManager& manager;
     std::string assetRoot;
+    ayt::ui::Widget* mountParent = nullptr;
     FlowRootWidget* flowRoot = nullptr;
     math::FVector2 lastViewport{-1.0f, -1.0f};
     std::unordered_map<std::string, std::unique_ptr<LayerRecord>> layers;
     std::unordered_map<std::uint64_t, MountRecord> mounts;
+    std::vector<MountRecord> retiringMounts;
     std::uint64_t nextLayerSerial = 1;
 };
 
 UIManagerFlowScreenHost::UIManagerFlowScreenHost(
     ayt::ui::UIManager& manager,
-    std::string assetRoot)
-    : _impl(std::make_unique<Impl>(manager, std::move(assetRoot)))
+    std::string assetRoot,
+    ayt::ui::Widget* mountParent)
+    : _impl(std::make_unique<Impl>(
+          manager, std::move(assetRoot), mountParent))
 {
 }
 
@@ -358,6 +416,16 @@ bool UIManagerFlowScreenHost::mountScreen(
         error = "Cannot load layout '" + path.string() + "'.";
         return false;
     }
+    const auto& animations = loader->getAnimationLibrary();
+    if ((!request.enterAnimation.empty()
+            && animations.findClip(request.enterAnimation) == nullptr)
+        || (!request.exitAnimation.empty()
+            && animations.findClip(request.exitAnimation) == nullptr)) {
+        error = "Screen '" + request.screenId
+            + "' references a missing enter/exit animation clip.";
+        ayt::ui::destroyWidgetTree(root);
+        return false;
+    }
 
     Impl::LayerRecord* layer = _impl->ensureLayer(request, error);
     if (layer == nullptr) {
@@ -374,6 +442,13 @@ bool UIManagerFlowScreenHost::mountScreen(
     value.root = root;
     value.layer = layer;
     _impl->mounts.emplace(request.mountId, std::move(value));
+    if (!request.enterAnimation.empty()) {
+        auto& mounted = _impl->mounts.at(request.mountId);
+        mounted.animation.emplace(
+            mounted.loader->createAnimationTimeline(request.enterAnimation));
+        mounted.animation->play();
+        if (!mounted.animation->isRunning()) mounted.animation.reset();
+    }
     _impl->resizeWidgetTree(root);
     _impl->sortScreens(*layer);
     _impl->syncViewport();
@@ -402,8 +477,27 @@ void UIManagerFlowScreenHost::setScreenOrder(
 
 void UIManagerFlowScreenHost::update(float deltaSeconds)
 {
-    (void)deltaSeconds;
     _impl->syncViewport();
+
+    for (auto& pair : _impl->mounts) {
+        if (!pair.second.animation.has_value()) continue;
+        pair.second.animation->tick(deltaSeconds);
+        if (!pair.second.animation->isRunning()) pair.second.animation.reset();
+    }
+    for (auto it = _impl->retiringMounts.begin();
+         it != _impl->retiringMounts.end();) {
+        if (it->animation.has_value()) it->animation->tick(deltaSeconds);
+        if (it->animation.has_value() && it->animation->isRunning()) {
+            ++it;
+            continue;
+        }
+        Impl::LayerRecord* layer = it->layer;
+        _impl->manager.clearTransientStateForSubtree(it->root);
+        ayt::ui::destroyWidgetTree(it->root);
+        it = _impl->retiringMounts.erase(it);
+        _impl->removeUnusedLayer(layer);
+        _impl->manager.invalidateLayout();
+    }
 
     // Each Screen owns an independent loader and watcher. Reload into a new
     // tree first, then replace the old child, preserving the active Screen
@@ -414,10 +508,12 @@ void UIManagerFlowScreenHost::update(float deltaSeconds)
         ayt::ui::Widget* replacement = mount.loader->tryReload();
         if (replacement == nullptr) continue;
         ayt::ui::Widget* old = mount.root;
+        mount.animation.reset();
         mount.layer->widget->addChild(replacement);
         mount.root = replacement;
         _impl->resizeWidgetTree(replacement);
         _impl->sortScreens(*mount.layer);
+        _impl->manager.clearTransientStateForSubtree(old);
         ayt::ui::destroyWidgetTree(old);
         _impl->manager.invalidateLayout();
     }
@@ -438,6 +534,15 @@ ayt::ui::Widget* UIManagerFlowScreenHost::findWidget(
     return found == _impl->mounts.end()
         ? nullptr
         : found->second.loader->findWidgetById(widgetId);
+}
+
+bool UIManagerFlowScreenHost::isScreenRetiring(
+    std::uint64_t mountId) const noexcept
+{
+    return std::any_of(_impl->retiringMounts.begin(),
+        _impl->retiringMounts.end(), [mountId](const auto& value) {
+            return value.request.mountId == mountId;
+        });
 }
 
 } // namespace ayt::app

@@ -1,14 +1,36 @@
 {
-  "type": "Panel",
-  "id": "flow_fixture_root",
-  "size": { "w": 320, "h": 180 },
-  "children": [
+  "animations": [
     {
-      "type": "Button",
-      "id": "flow_fixture_button",
-      "position": { "x": 24, "y": 20 },
-      "size": { "w": 120, "h": 32 },
-      "text": "Continue"
+      "name": "flow.enter",
+      "tracks": [
+        { "target": "flow_fixture_root", "property": "opacity", "keyframes": [
+          { "timeMs": 0, "value": 0.25, "curve": "linear" },
+          { "timeMs": 100, "value": 1.0, "curve": "linear" }
+        ] }
+      ]
+    },
+    {
+      "name": "flow.exit",
+      "tracks": [
+        { "target": "flow_fixture_root", "property": "opacity", "keyframes": [
+          { "timeMs": 0, "value": 1.0, "curve": "linear" },
+          { "timeMs": 100, "value": 0.0, "curve": "linear" }
+        ] }
+      ]
     }
-  ]
+  ],
+  "root": {
+    "type": "Panel",
+    "id": "flow_fixture_root",
+    "size": { "w": 320, "h": 180 },
+    "children": [
+      {
+        "type": "Button",
+        "id": "flow_fixture_button",
+        "position": { "x": 24, "y": 20 },
+        "size": { "w": 120, "h": 32 },
+        "text": "Continue"
+      }
+    ]
+  }
 }
