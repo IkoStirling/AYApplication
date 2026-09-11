@@ -361,13 +361,51 @@ public:
     void appendTrace(const Execution& execution,
                      UIFlowGraphNodeExecutionId nodeExecutionId,
                      std::string nodeId,
-                     std::string detail)
+                     std::string detail,
+                     UIFlowPayload inputs = {},
+                     UIFlowPayload outputs = {})
     {
         traces.push_back({nextTraceSerial++,
             execution.request.executionId, nodeExecutionId,
             execution.request.graph.graphId, std::move(nodeId),
-            std::move(detail)});
+            std::move(detail), std::move(inputs), std::move(outputs)});
         if (traces.size() > 512u) traces.erase(traces.begin());
+    }
+
+    static std::string breakpointKey(
+        std::string_view graphId, std::string_view nodeId)
+    {
+        return std::string(graphId) + "\n" + std::string(nodeId);
+    }
+
+    bool pauseBeforeNode(Execution& execution,
+                         const ayt::ui::UIFlowNodeDefinition& node,
+                         UIFlowPayload inputs)
+    {
+        const auto resume = resumeOnce.find(execution.request.executionId);
+        const bool skipPause = resume != resumeOnce.end()
+            && resume->second == node.id;
+        if (skipPause) resumeOnce.erase(resume);
+
+        const bool stepBoundary = !skipPause && pauseAfterNode.erase(
+            execution.request.executionId) != 0u;
+        const bool breakpoint = breakpoints.contains(breakpointKey(
+            execution.request.graph.graphId, node.id));
+        if (skipPause || (!pauseRequested && !stepBoundary && !breakpoint)) {
+            return false;
+        }
+        pauseRequested = false;
+        paused = UIFlowGraphDebugPause{
+            execution.request.executionId,
+            execution.request.graph.graphId,
+            node.id,
+            node.type,
+            stepBoundary ? "step" : breakpoint ? "breakpoint" : "manual",
+            std::move(inputs)};
+        execution.ready.push_front(node.id);
+        appendTrace(execution, 0u, node.id,
+            "paused:" + paused->reason, paused->inputs);
+        return true;
     }
 
     void routeCompleted(Execution& execution,
@@ -423,6 +461,12 @@ public:
                        std::string message,
                        bool notify)
     {
+        if (paused.has_value()
+            && paused->graphExecutionId == executionId) {
+            paused.reset();
+        }
+        resumeOnce.erase(executionId);
+        pauseAfterNode.erase(executionId);
         std::vector<UIFlowGraphNodeCancellationHandler> cancellations;
         const auto found = executions.find(executionId);
         if (found != executions.end()) {
@@ -523,6 +567,11 @@ public:
                         + node->type + "'.",
                     notify);
             }
+            UIFlowPayload resolvedInputs = inputsFor(execution, *node);
+            if (pauseBeforeNode(
+                    execution, *node, resolvedInputs)) {
+                return {DriveState::Running, {}};
+            }
             const UIFlowGraphNodeExecutionId nodeExecutionId =
                 nextNodeExecutionId++;
             UIFlowGraphNodeInvocation invocation;
@@ -531,8 +580,9 @@ public:
             invocation.graph = execution.graph;
             invocation.node = node;
             invocation.request = execution.request.graph;
-            invocation.inputs = inputsFor(execution, *node);
-            appendTrace(execution, nodeExecutionId, nodeId, "started");
+            invocation.inputs = std::move(resolvedInputs);
+            appendTrace(execution, nodeExecutionId, nodeId, "started",
+                        invocation.inputs);
 
             UIFlowGraphNodeResult result;
             try {
@@ -574,7 +624,8 @@ public:
                 return finish(executionId, false, resultError, notify);
             }
             appendTrace(resumed, nodeExecutionId, nodeId,
-                        "completed:" + result.flowOutput);
+                        "completed:" + result.flowOutput,
+                        {}, result.outputs);
             routeCompleted(resumed, nodeId, std::move(result));
         }
     }
@@ -587,6 +638,11 @@ public:
         nodeExecutions;
     UIFlowGraphCompletionHandler completionHandler;
     std::vector<UIFlowGraphExecutorTrace> traces;
+    std::unordered_set<std::string> breakpoints;
+    std::optional<UIFlowGraphDebugPause> paused;
+    std::unordered_map<UIFlowGraphExecutionId, std::string> resumeOnce;
+    std::unordered_set<UIFlowGraphExecutionId> pauseAfterNode;
+    bool pauseRequested = false;
     UIFlowGraphNodeExecutionId nextNodeExecutionId = 1;
     std::uint64_t nextTraceSerial = 1;
 
@@ -604,6 +660,10 @@ public:
         }
         nodeExecutions.clear();
         executions.clear();
+        paused.reset();
+        resumeOnce.clear();
+        pauseAfterNode.clear();
+        pauseRequested = false;
         for (auto& cancel : cancellations) {
             try {
                 cancel(interrupt);
@@ -812,7 +872,8 @@ bool UIFlowGraphExecutor::completeNode(
         return false;
     }
     _impl->appendTrace(execution->second, nodeExecutionId, nodeId,
-                       "completed:" + result.flowOutput);
+                       "completed:" + result.flowOutput,
+                       {}, result.outputs);
     _impl->routeCompleted(execution->second, nodeId, std::move(result));
     const Impl::DriveResult driven = _impl->drive(graphExecutionId, true);
     if (driven.state == Impl::DriveState::Failed) {
@@ -859,6 +920,12 @@ bool UIFlowGraphExecutor::interruptGraph(
 {
     const auto found = _impl->executions.find(executionId);
     if (found == _impl->executions.end()) return false;
+    if (_impl->paused.has_value()
+        && _impl->paused->graphExecutionId == executionId) {
+        _impl->paused.reset();
+    }
+    _impl->resumeOnce.erase(executionId);
+    _impl->pauseAfterNode.erase(executionId);
     UIFlowGraphNodeExecutionId tracedNode = 0u;
     std::string tracedNodeId;
     if (!found->second.pending.empty()) {
@@ -906,6 +973,86 @@ std::size_t UIFlowGraphExecutor::pendingGraphCount() const noexcept
 std::size_t UIFlowGraphExecutor::pendingNodeCount() const noexcept
 {
     return _impl->nodeExecutions.size();
+}
+
+bool UIFlowGraphExecutor::setBreakpoint(
+    std::string graphId, std::string nodeId, bool enabled)
+{
+    if (graphId.empty() || nodeId.empty()) return false;
+    const std::string key = Impl::breakpointKey(graphId, nodeId);
+    if (enabled) {
+        _impl->breakpoints.insert(key);
+    } else {
+        _impl->breakpoints.erase(key);
+    }
+    return true;
+}
+
+void UIFlowGraphExecutor::clearBreakpoints() noexcept
+{
+    _impl->breakpoints.clear();
+}
+
+std::size_t UIFlowGraphExecutor::breakpointCount() const noexcept
+{
+    return _impl->breakpoints.size();
+}
+
+void UIFlowGraphExecutor::requestPause() noexcept
+{
+    _impl->pauseRequested = true;
+}
+
+bool UIFlowGraphExecutor::isPaused() const noexcept
+{
+    return _impl->paused.has_value();
+}
+
+const UIFlowGraphDebugPause* UIFlowGraphExecutor::debugPause() const noexcept
+{
+    return _impl->paused.has_value() ? &*_impl->paused : nullptr;
+}
+
+bool UIFlowGraphExecutor::continueExecution(std::string* error)
+{
+    if (!_impl->paused.has_value()) {
+        if (error != nullptr) *error = "Graph executor is not paused.";
+        return false;
+    }
+    const UIFlowGraphExecutionId executionId =
+        _impl->paused->graphExecutionId;
+    const std::string nodeId = _impl->paused->nodeId;
+    _impl->paused.reset();
+    _impl->resumeOnce[executionId] = nodeId;
+    _impl->pauseAfterNode.erase(executionId);
+    const Impl::DriveResult result = _impl->drive(executionId, true);
+    if (result.state == Impl::DriveState::Failed) {
+        if (error != nullptr) *error = result.message;
+        return false;
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool UIFlowGraphExecutor::stepExecution(std::string* error)
+{
+    if (!_impl->paused.has_value()) {
+        if (error != nullptr) *error = "Graph executor is not paused.";
+        return false;
+    }
+    const UIFlowGraphExecutionId executionId =
+        _impl->paused->graphExecutionId;
+    const std::string nodeId = _impl->paused->nodeId;
+    _impl->paused.reset();
+    _impl->resumeOnce[executionId] = nodeId;
+    _impl->pauseAfterNode.insert(executionId);
+    const Impl::DriveResult result = _impl->drive(executionId, true);
+    if (result.state == Impl::DriveState::Failed) {
+        if (error != nullptr) *error = result.message;
+        return false;
+    }
+    if (error != nullptr) error->clear();
+    return true;
 }
 
 const std::vector<UIFlowGraphExecutorTrace>& UIFlowGraphExecutor::trace()

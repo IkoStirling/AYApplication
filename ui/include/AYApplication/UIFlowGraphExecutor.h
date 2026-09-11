@@ -72,6 +72,18 @@ struct UIFlowGraphExecutorTrace
     std::string graphId;
     std::string nodeId;
     std::string detail;
+    UIFlowPayload inputs;
+    UIFlowPayload outputs;
+};
+
+struct UIFlowGraphDebugPause
+{
+    UIFlowGraphExecutionId graphExecutionId = 0;
+    std::string graphId;
+    std::string nodeId;
+    std::string nodeType;
+    std::string reason;
+    UIFlowPayload inputs;
 };
 
 // Executes host-registered command nodes while AYUI remains an open wire and
@@ -122,6 +134,21 @@ public:
         UIFlowGraphExecutionId executionId) const noexcept;
     [[nodiscard]] std::size_t pendingGraphCount() const noexcept;
     [[nodiscard]] std::size_t pendingNodeCount() const noexcept;
+
+    // Debug controls are inert until a breakpoint or manual pause is set.
+    // Pausing occurs immediately before a node handler is invoked, so the
+    // snapshot contains the exact resolved inputs without causing side effects.
+    bool setBreakpoint(
+        std::string graphId,
+        std::string nodeId,
+        bool enabled = true);
+    void clearBreakpoints() noexcept;
+    [[nodiscard]] std::size_t breakpointCount() const noexcept;
+    void requestPause() noexcept;
+    [[nodiscard]] bool isPaused() const noexcept;
+    [[nodiscard]] const UIFlowGraphDebugPause* debugPause() const noexcept;
+    bool continueExecution(std::string* error = nullptr);
+    bool stepExecution(std::string* error = nullptr);
 
     [[nodiscard]] const std::vector<UIFlowGraphExecutorTrace>& trace()
         const noexcept;

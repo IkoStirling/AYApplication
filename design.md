@@ -1278,6 +1278,12 @@ Widget 或布局资产。World、Owner 与 Transient presentation 在 Scene 实�
 Scene 使用相同 World key 的情况；Application presentation 跨 Scene 保留，直到显式 pop 或 Bridge
 停止。由此 Scene 代码控制“何时出现哪组 UI 能力”，而 Flow 继续独占 Layer/Slot/Screen 的组合细节。
 
+阶段十一为生产 Graph Executor 增加可选调试控制。断点在 node handler 调用前命中，快照携带已经合并
+property、default 与 value link 的最终 inputs；started/completed trace 分别保留 inputs/outputs。
+`requestPause()`、`stepExecution()` 与 `continueExecution()` 只操纵现有 execution/ready queue，不复制
+运行逻辑。单步遇到异步节点时等待真实 continuation，再在下一个 ready 节点暂停；interrupt、reset、
+document replacement 和 graph finish 都清除关联暂停状态，避免悬空调试快照。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. 参考

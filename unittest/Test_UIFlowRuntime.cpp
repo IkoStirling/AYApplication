@@ -1576,6 +1576,87 @@ TEST_CASE(graph_executor_reports_missing_linked_output_and_incomplete_join)
     CHECK(join.message.find("did not receive") != std::string::npos);
 }
 
+TEST_CASE(graph_executor_breakpoints_step_and_capture_resolved_values)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    UIFlowDocument document;
+    document.graphs.push_back({"debug", {
+        {"produce", "test.produce", {{"seed", std::int64_t{7}}}},
+        {"consume", "test.consume", {}},
+    }, {
+        {"produce", "completed", "consume", "execute"},
+        {"produce", "value", "consume", "value"},
+    }});
+
+    UIFlowGraphExecutor executor;
+    executor.setDocument(&document);
+    int producerRuns = 0;
+    int consumerRuns = 0;
+    CHECK(executor.registerNodeType({"test.produce", "Produce", "Test", {
+        {"completed", Direction::Output, Kind::Execution},
+        {"value", Direction::Output, Kind::Value,
+         ayt::ui::UIFlowValueType::Integer},
+    }, {{"seed", ayt::ui::UIFlowValueType::Integer, false, {}}}},
+        [&producerRuns](const UIFlowGraphNodeInvocation& invocation) {
+            ++producerRuns;
+            return UIFlowGraphNodeResult::completed("completed", {{
+                "value", std::get<std::int64_t>(
+                    invocation.inputs.at("seed").data) + 35}});
+        }));
+    CHECK(executor.registerNodeType({"test.consume", "Consume", "Test", {
+        {"execute", Direction::Input, Kind::Execution},
+        {"value", Direction::Input, Kind::Value,
+         ayt::ui::UIFlowValueType::Integer},
+        {"completed", Direction::Output, Kind::Execution},
+    }, {}}, [&consumerRuns](const UIFlowGraphNodeInvocation& invocation) {
+        ++consumerRuns;
+        return std::get<std::int64_t>(
+            invocation.inputs.at("value").data) == 42
+            ? UIFlowGraphNodeResult::completed()
+            : UIFlowGraphNodeResult::failure("debug value mismatch");
+    }));
+    CHECK(executor.setBreakpoint("debug", "produce"));
+    CHECK(executor.breakpointCount() == 1u);
+
+    CHECK(executor.start({40u, UIFlowGraphRequest{"debug"}}).state
+          == UIFlowGraphStartState::Running);
+    CHECK(executor.isPaused());
+    CHECK(producerRuns == 0);
+    const UIFlowGraphDebugPause* first = executor.debugPause();
+    CHECK(first != nullptr);
+    CHECK(first != nullptr && first->nodeId == "produce");
+    CHECK(first != nullptr && first->reason == "breakpoint");
+    CHECK(first != nullptr && std::get<std::int64_t>(
+        first->inputs.at("seed").data) == 7);
+
+    CHECK(executor.stepExecution());
+    CHECK(producerRuns == 1);
+    CHECK(consumerRuns == 0);
+    CHECK(executor.isPaused());
+    const UIFlowGraphDebugPause* second = executor.debugPause();
+    CHECK(second != nullptr);
+    CHECK(second != nullptr && second->nodeId == "consume");
+    CHECK(second != nullptr && second->reason == "step");
+    CHECK(second != nullptr && std::get<std::int64_t>(
+        second->inputs.at("value").data) == 42);
+
+    CHECK(executor.continueExecution());
+    CHECK(consumerRuns == 1);
+    CHECK_FALSE(executor.isPaused());
+    CHECK_FALSE(executor.hasPendingGraph(40u));
+    const auto completed = std::find_if(
+        executor.trace().begin(), executor.trace().end(),
+        [](const UIFlowGraphExecutorTrace& value) {
+            return value.nodeId == "produce"
+                && value.detail.starts_with("completed:");
+        });
+    CHECK(completed != executor.trace().end());
+    CHECK(completed != executor.trace().end()
+          && std::get<std::int64_t>(
+              completed->outputs.at("value").data) == 42);
+}
+
 TEST_CASE(graph_executor_plugs_into_runtime_graph_pipeline)
 {
     using Direction = ayt::ui::UIFlowGraphPinDirection;
