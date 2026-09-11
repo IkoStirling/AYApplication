@@ -104,6 +104,7 @@ scope 恢复进入本次运行前的 Host 服务、任务 hook、Scene 选择与
 | `AYNetwork.OnlineFlow` | `AYNetwork.Online` | 登录至加载/会话退出的应用流程 |
 | `AYOnlineApplication.Runtime` | `AYNetwork.OnlineFlow`、`AYApplication.RuntimeSceneLoader` | Client Online Flow 与 Scene 桥 |
 | `AYApplication.UIFlowRuntime` | `AYApplicationUI`（编译期依赖 AYUI） | Client/Tool 的跨 World UI 编排；项目注入 Screen host 与 Flow document |
+| `AYApplication.UIFlowSceneBridge` | `AYApplication.UIFlowRuntime`、`AYEntity.Runtime`；可选 `AYApplication.GameWorldRouter` | World Scope/Context 生命周期绑定、通用区域与外部 Scene Signal 接入 |
 
 `GameDesc::configureModules` 在默认图配置完成后执行。Online 客户端优先调用
 `configureOnlineApplicationModules()`，它会复用已有稳定 ID，补齐 Network → Online →
@@ -222,6 +223,7 @@ ayt::app::providePhysics(host, mgr);
 | `kHostServiceRuntimeSceneLoader` | `ayt.app.RuntimeSceneLoader` | `IRuntimeSceneLoader*` | `AYApplication.RuntimeSceneLoader` 安装，`bindBuiltinHostServices` 发布 | Client 禁用或未安装 RuntimeSceneLoader |
 | `kHostServiceGameWorldRouter` | `ayt.app.GameWorldRouter` | `IGameWorldRouter*` | `runGameProject` 添加的 `AYApplication.GameWorldRouter` | Server、非 GameProject 应用或尚未初始化 |
 | `kHostServiceUIFlowRuntime` | `ayt.app.UIFlowRuntime` | `UIFlowRuntime*` | `AYApplication.UIFlowRuntime` 安装；模块 shutdown 前清除 | 未选择 UI Flow、headless/server 或模块尚未安装 |
+| `kHostServiceUIFlowSceneBridge` | `ayt.app.UIFlowSceneBridge` | `UIFlowSceneBridge*` | `AYApplication.UIFlowSceneBridge` 安装；模块 shutdown 前清除 | 未接入 Scene Bridge 或模块尚未安装 |
 | `kHostServiceOnlineFlow` | `ayt.net.OnlineFlowCoordinator` | `OnlineFlowCoordinator*` | `AYOnlineApplication.Runtime` 初始化 | 未选择 Online 栈或尚未初始化 |
 | `kHostServiceOnlineApplication` | `ayt.app.online.OnlineApplication` | `IOnlineApplicationSubSystem*` | `AYOnlineApplication.Runtime` 初始化 | 未选择 Online 栈或尚未初始化 |
 

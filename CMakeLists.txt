@@ -127,9 +127,15 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 # runtime an Application-owned service rather than an AYUI singleton.
 if(TARGET AYUI)
     add_library(AYApplicationUI STATIC
+        ui/src/AYUIFlowSceneBridge.cpp
+        ui/src/AYUIFlowSceneBridgeModule.cpp
+        ui/src/AYUIFlowSceneComponents.cpp
         ui/src/AYUIFlowRuntime.cpp
         ui/src/AYUIFlowRuntimeModule.cpp
         ui/src/AYUIManagerFlowScreenHost.cpp
+        ui/include/AYApplication/UIFlowSceneBridge.h
+        ui/include/AYApplication/UIFlowSceneBridgeModule.h
+        ui/include/AYApplication/UIFlowSceneComponents.h
         ui/include/AYApplication/UIFlowRuntime.h
         ui/include/AYApplication/UIFlowRuntimeModule.h
         ui/include/AYApplication/UIManagerFlowScreenHost.h
@@ -141,8 +147,10 @@ if(TARGET AYUI)
     )
     target_link_libraries(AYApplicationUI PUBLIC
         AYApplication
+        AYEntityCore
         AYUI
     )
+    target_link_libraries(AYApplicationUI PRIVATE AYScene)
     target_compile_options(AYApplicationUI PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>: /W4>
         $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
@@ -302,9 +310,12 @@ if(BUILD_TESTING AND
         add_executable(UIFlowRuntimeTest
             unittest/TestMain.cpp
             unittest/Test_UIFlowRuntime.cpp
+            unittest/Test_UIFlowSceneBridge.cpp
         )
         target_link_libraries(UIFlowRuntimeTest PRIVATE
             AYApplicationUI
+            AYEntityCore
+            AYScene
             AYTest
         )
         target_compile_options(UIFlowRuntimeTest PRIVATE

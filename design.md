@@ -1210,9 +1210,19 @@ handler 都通过回调/registry 扩展，异常不得越过 runtime 边界。
 
 项目通过 `GameDesc::configureModules` 显式加入 `UIFlowRuntimeModule`，并传入已经初始化的
 `UIManagerFlowScreenHost`。Flow 子树由该 Host 持有并以 external child 接入 `UIManager`；宿主替换
-根布局时，子树先安全脱离，再在下一次 update 重挂，不会丢失当前 Screen。这一步不等价于
-Scene bridge：Scene 生命周期和区域组件在下一
-阶段只调用 `beginScope/endScope/emitSignal/activateContext`，不能查找或直接修改 Widget。
+根布局时，子树先安全脱离，再在下一次 update 重挂，不会丢失当前 Screen。
+
+阶段三在同一可选目标中增加 `UIFlowSceneBridge`、`UIFlowSceneBridgeModule` 和两种通用 Scene 组件。
+Bridge 订阅现有 Scene 生命周期事件，在 `FramePhase::World` 同步 World Scope 和 World→Context 映射，
+并把声明过的生命周期/交互信号送入 `UIFlowRuntime`。如果安装了 `GameWorldRouter`，模块图保证 Bridge
+在 Router 初始化之后运行，World 切换优先使用稳定的 `pendingWorldId`。Bridge 以
+`kHostServiceUIFlowSceneBridge` 发布 non-owning 服务，物理、脚本和任务系统可通过
+`emitSceneSignal()` 复用同一入口。
+
+`SceneSignalVolumeComponent` 与 `SceneSignalParticipantComponent` 是 editor-addable、scene-serializable
+的 Entity 组件，不持有 Widget、Screen 或游戏类型。内建检测应用 Transform position/scale，忽略旋转，
+并以 O(volume × participant) 的确定性扫描覆盖少量 authored UI region；大规模区域由物理 broadphase
+检测后调用显式入口。Scene scope 挂载失败时旧 UI 保持不变，Bridge 在后续帧自动重试同步。
 
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
