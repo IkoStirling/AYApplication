@@ -1298,6 +1298,284 @@ TEST_CASE(graph_executor_rejects_cycles_and_cancels_pending_work)
     CHECK(error.find("Unknown") != std::string::npos);
 }
 
+TEST_CASE(graph_executor_orders_nodes_from_value_dependencies)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    UIFlowDocument document;
+    // Consumer deliberately appears first. Document order must not let it run
+    // before the producer connected through the value link.
+    document.graphs.push_back({"data_order", {
+        {"consumer", "test.consumer", {}},
+        {"producer", "test.producer", {}},
+    }, {{"producer", "value", "consumer", "value"}}});
+
+    UIFlowGraphExecutor executor;
+    executor.setDocument(&document);
+    CHECK(executor.registerNodeType({"test.producer", "Producer", "Test", {
+        {"completed", Direction::Output, Kind::Execution},
+        {"value", Direction::Output, Kind::Value,
+         ayt::ui::UIFlowValueType::Integer},
+    }, {}}, [](const UIFlowGraphNodeInvocation&) {
+        return UIFlowGraphNodeResult::completed(
+            "completed", {{"value", std::int64_t{73}}});
+    }));
+    bool consumerRan = false;
+    CHECK(executor.registerNodeType({"test.consumer", "Consumer", "Test", {
+        {"completed", Direction::Output, Kind::Execution},
+        {"value", Direction::Input, Kind::Value,
+         ayt::ui::UIFlowValueType::Integer},
+    }, {}}, [&consumerRan](const UIFlowGraphNodeInvocation& invocation) {
+        consumerRan = true;
+        CHECK(std::get<std::int64_t>(
+            invocation.inputs.at("value").data) == 73);
+        return UIFlowGraphNodeResult::completed();
+    }));
+
+    const UIFlowGraphStartResult result = executor.start(
+        {31u, UIFlowGraphRequest{"data_order"}});
+    CHECK(result.state == UIFlowGraphStartState::Completed);
+    CHECK(consumerRan);
+}
+
+TEST_CASE(graph_executor_rejects_ambiguous_and_cyclic_value_dependencies)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    const ayt::ui::UIFlowGraphNodeTypeDefinition valueNode = {
+        "test.value", "Value", "Test", {
+            {"completed", Direction::Output, Kind::Execution},
+            {"input", Direction::Input, Kind::Value,
+             ayt::ui::UIFlowValueType::Integer},
+            {"value", Direction::Output, Kind::Value,
+             ayt::ui::UIFlowValueType::Integer},
+        }, {}};
+    UIFlowDocument document;
+    document.graphs.push_back({"ambiguous", {
+        {"a", "test.value", {}}, {"b", "test.value", {}},
+        {"target", "test.value", {}},
+    }, {
+        {"a", "value", "target", "input"},
+        {"b", "value", "target", "input"},
+    }});
+    document.graphs.push_back({"data_cycle", {
+        {"a", "test.value", {}}, {"b", "test.value", {}},
+    }, {
+        {"a", "value", "b", "input"},
+        {"b", "value", "a", "input"},
+    }});
+
+    UIFlowGraphExecutor executor;
+    executor.setDocument(&document);
+    CHECK(executor.registerNodeType(valueNode,
+        [](const UIFlowGraphNodeInvocation&) {
+            return UIFlowGraphNodeResult::completed(
+                "completed", {{"value", std::int64_t{1}}});
+        }));
+    const UIFlowGraphStartResult ambiguous = executor.start(
+        {32u, UIFlowGraphRequest{"ambiguous"}});
+    CHECK(ambiguous.state == UIFlowGraphStartState::Rejected);
+    CHECK(ambiguous.message.find("multiple producers") != std::string::npos);
+    const UIFlowGraphStartResult cycle = executor.start(
+        {33u, UIFlowGraphRequest{"data_cycle"}});
+    CHECK(cycle.state == UIFlowGraphStartState::Rejected);
+    CHECK(cycle.message.find("dependency cycle") != std::string::npos);
+}
+
+TEST_CASE(graph_executor_runs_independent_async_nodes_and_explicit_join)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    UIFlowDocument document;
+    document.graphs.push_back({"parallel_join", {
+        {"left", "test.wait", {}}, {"right", "test.wait", {}},
+        {"join", "test.join", {}},
+    }, {
+        {"left", "completed", "join", "left"},
+        {"right", "completed", "join", "right"},
+    }});
+    UIFlowGraphExecutor executor;
+    executor.setDocument(&document);
+    std::vector<UIFlowGraphNodeExecutionId> pending;
+    CHECK(executor.registerNodeType({"test.wait", "Wait", "Test", {
+        {"completed", Direction::Output, Kind::Execution},
+    }, {}}, [&pending](const UIFlowGraphNodeInvocation& invocation) {
+        pending.push_back(invocation.nodeExecutionId);
+        return UIFlowGraphNodeResult::running();
+    }));
+    int joinRuns = 0;
+    CHECK(executor.registerNodeType({"test.join", "Join", "Test", {
+        {"left", Direction::Input, Kind::Execution},
+        {"right", Direction::Input, Kind::Execution},
+        {"completed", Direction::Output, Kind::Execution},
+    }, {}}, [&joinRuns](const UIFlowGraphNodeInvocation&) {
+        ++joinRuns;
+        return UIFlowGraphNodeResult::completed();
+    }));
+    bool graphCompleted = false;
+    executor.setCompletionHandler(
+        [&graphCompleted](UIFlowGraphExecutionId, bool succeeded,
+                          std::string) {
+            graphCompleted = succeeded;
+        });
+
+    CHECK(executor.start({34u, UIFlowGraphRequest{"parallel_join"}}).state
+          == UIFlowGraphStartState::Running);
+    CHECK(pending.size() == 2u);
+    CHECK(executor.pendingNodeCount() == 2u);
+    CHECK(executor.completeNode(
+        pending[0], UIFlowGraphNodeResult::completed()));
+    CHECK(joinRuns == 0);
+    CHECK(executor.pendingNodeCount() == 1u);
+    CHECK(executor.completeNode(
+        pending[1], UIFlowGraphNodeResult::completed()));
+    CHECK(joinRuns == 1);
+    CHECK(graphCompleted);
+    CHECK(executor.pendingGraphCount() == 0u);
+}
+
+TEST_CASE(graph_executor_propagates_interrupts_and_expires_running_nodes)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    UIFlowDocument document;
+    document.graphs.push_back({"cancel", {
+        {"a", "test.cancel", {}}, {"b", "test.cancel", {}},
+    }, {}});
+    document.graphs.push_back({"timeout", {
+        {"wait", "test.timeout", {}},
+    }, {}});
+    UIFlowGraphExecutor executor;
+    executor.setDocument(&document);
+    const std::vector<ayt::ui::UIFlowGraphPinTypeDefinition> pins = {
+        {"completed", Direction::Output, Kind::Execution},
+    };
+    int reversed = 0;
+    int cancelled = 0;
+    CHECK(executor.registerNodeType(
+        {"test.cancel", "Cancel", "Test", pins, {}},
+        [&reversed, &cancelled](const UIFlowGraphNodeInvocation&) {
+            return UIFlowGraphNodeResult::running(0.0,
+                [&reversed, &cancelled](UIFlowGraphInterrupt interrupt) {
+                    if (interrupt == UIFlowGraphInterrupt::Reverse) {
+                        ++reversed;
+                    } else {
+                        ++cancelled;
+                    }
+                });
+        }));
+    int timeoutCancelled = 0;
+    CHECK(executor.registerNodeType(
+        {"test.timeout", "Timeout", "Test", pins, {}},
+        [&timeoutCancelled](const UIFlowGraphNodeInvocation&) {
+            return UIFlowGraphNodeResult::running(0.5,
+                [&timeoutCancelled](UIFlowGraphInterrupt) {
+                    ++timeoutCancelled;
+                });
+        }));
+
+    CHECK(executor.start({35u, UIFlowGraphRequest{"cancel"}}).state
+          == UIFlowGraphStartState::Running);
+    CHECK(executor.pendingNodeCount() == 2u);
+    CHECK(executor.interruptGraph(35u, UIFlowGraphInterrupt::Reverse));
+    CHECK(reversed == 2);
+    CHECK(executor.pendingNodeCount() == 0u);
+
+    bool completionCalled = false;
+    bool completionSucceeded = true;
+    std::string completionMessage;
+    executor.setCompletionHandler(
+        [&](UIFlowGraphExecutionId executionId, bool succeeded,
+            std::string message) {
+            CHECK(executionId == 36u);
+            completionCalled = true;
+            completionSucceeded = succeeded;
+            completionMessage = std::move(message);
+        });
+    CHECK(executor.start({36u, UIFlowGraphRequest{"timeout"}}).state
+          == UIFlowGraphStartState::Running);
+    executor.update(0.25);
+    CHECK(executor.hasPendingGraph(36u));
+    executor.update(0.25);
+    CHECK_FALSE(executor.hasPendingGraph(36u));
+    CHECK(timeoutCancelled == 1);
+    CHECK(completionCalled);
+    CHECK_FALSE(completionSucceeded);
+    CHECK(completionMessage.find("timed out") != std::string::npos);
+
+    CHECK(executor.start({39u, UIFlowGraphRequest{"cancel"}}).state
+          == UIFlowGraphStartState::Running);
+    CHECK(executor.pendingNodeCount() == 2u);
+    executor.setDocument(nullptr);
+    CHECK(cancelled == 2);
+    CHECK(executor.pendingGraphCount() == 0u);
+    CHECK(executor.pendingNodeCount() == 0u);
+}
+
+TEST_CASE(graph_executor_reports_missing_linked_output_and_incomplete_join)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    UIFlowDocument document;
+    document.graphs.push_back({"missing_value", {
+        {"consumer", "test.consumer", {}},
+        {"producer", "test.missing", {}},
+    }, {{"producer", "value", "consumer", "value"}}});
+    document.graphs.push_back({"incomplete_join", {
+        {"branch", "test.branch", {}},
+        {"other", "test.command", {}},
+        {"join", "test.join", {}},
+    }, {
+        {"branch", "completed", "join", "left"},
+        {"branch", "other", "other", "execute"},
+        {"other", "completed", "join", "right"},
+    }});
+    UIFlowGraphExecutor executor;
+    executor.setDocument(&document);
+    CHECK(executor.registerNodeType({"test.missing", "Missing", "Test", {
+        {"completed", Direction::Output, Kind::Execution},
+        {"value", Direction::Output, Kind::Value,
+         ayt::ui::UIFlowValueType::Integer},
+    }, {}}, [](const UIFlowGraphNodeInvocation&) {
+        return UIFlowGraphNodeResult::completed();
+    }));
+    CHECK(executor.registerNodeType({"test.consumer", "Consumer", "Test", {
+        {"completed", Direction::Output, Kind::Execution},
+        {"value", Direction::Input, Kind::Value,
+         ayt::ui::UIFlowValueType::Integer},
+    }, {}}, [](const UIFlowGraphNodeInvocation&) {
+        return UIFlowGraphNodeResult::completed();
+    }));
+    CHECK(executor.registerNodeType({"test.branch", "Branch", "Test", {
+        {"completed", Direction::Output, Kind::Execution},
+        {"other", Direction::Output, Kind::Execution},
+    }, {}}, [](const UIFlowGraphNodeInvocation&) {
+        return UIFlowGraphNodeResult::completed("completed");
+    }));
+    CHECK(executor.registerNodeType({"test.command", "Command", "Test", {
+        {"execute", Direction::Input, Kind::Execution},
+        {"completed", Direction::Output, Kind::Execution},
+    }, {}}, [](const UIFlowGraphNodeInvocation&) {
+        return UIFlowGraphNodeResult::completed();
+    }));
+    CHECK(executor.registerNodeType({"test.join", "Join", "Test", {
+        {"left", Direction::Input, Kind::Execution},
+        {"right", Direction::Input, Kind::Execution},
+        {"completed", Direction::Output, Kind::Execution},
+    }, {}}, [](const UIFlowGraphNodeInvocation&) {
+        return UIFlowGraphNodeResult::completed();
+    }));
+
+    const UIFlowGraphStartResult missing = executor.start(
+        {37u, UIFlowGraphRequest{"missing_value"}});
+    CHECK(missing.state == UIFlowGraphStartState::Rejected);
+    CHECK(missing.message.find("without linked value") != std::string::npos);
+    const UIFlowGraphStartResult join = executor.start(
+        {38u, UIFlowGraphRequest{"incomplete_join"}});
+    CHECK(join.state == UIFlowGraphStartState::Rejected);
+    CHECK(join.message.find("did not receive") != std::string::npos);
+}
+
 TEST_CASE(graph_executor_plugs_into_runtime_graph_pipeline)
 {
     using Direction = ayt::ui::UIFlowGraphPinDirection;

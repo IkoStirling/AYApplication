@@ -33,17 +33,27 @@ struct UIFlowGraphNodeInvocation
     UIFlowPayload inputs;
 };
 
+using UIFlowGraphNodeCancellationHandler =
+    std::function<void(UIFlowGraphInterrupt)>;
+
 struct UIFlowGraphNodeResult
 {
     UIFlowGraphNodeState state = UIFlowGraphNodeState::Completed;
     std::string flowOutput = "completed";
     UIFlowPayload outputs;
     std::string message;
+    // Running nodes may opt into executor-owned cancellation and timeout.
+    // A non-positive timeout disables expiry. Cancellation is invoked at most
+    // once when the graph fails, is interrupted, or its document is replaced.
+    double timeoutSeconds = 0.0;
+    UIFlowGraphNodeCancellationHandler onCancel;
 
     static UIFlowGraphNodeResult completed(
         std::string flowOutput = "completed",
         UIFlowPayload outputs = {});
-    static UIFlowGraphNodeResult running();
+    static UIFlowGraphNodeResult running(
+        double timeoutSeconds = 0.0,
+        UIFlowGraphNodeCancellationHandler onCancel = {});
     static UIFlowGraphNodeResult failure(std::string message);
 };
 
@@ -65,8 +75,10 @@ struct UIFlowGraphExecutorTrace
 };
 
 // Executes host-registered command nodes while AYUI remains an open wire and
-// authoring contract. Execution is deterministic and serial per Graph. A node
-// may suspend the Graph and later resume it through completeNode().
+// authoring contract. Ready nodes are started deterministically; independent
+// Running nodes may overlap. Value links establish producer dependencies, and
+// multiple execution input pins form an explicit all-input join. A node may
+// suspend and later resume through completeNode().
 class UIFlowGraphExecutor
 {
 public:
@@ -98,6 +110,9 @@ public:
         UIFlowGraphNodeExecutionId nodeExecutionId,
         UIFlowGraphNodeResult result,
         std::string* error = nullptr);
+    // Advances timeout accounting for Running nodes. Safe to call once per UI
+    // frame; non-finite and non-positive deltas are ignored.
+    void update(double deltaSeconds);
     bool interruptGraph(
         UIFlowGraphExecutionId executionId,
         UIFlowGraphInterrupt interrupt) noexcept;

@@ -1255,6 +1255,18 @@ continuation 失效。Completed result 的 flow output、value output 名称和�
 复核，错误 host handler 不能把不匹配的数据继续传播。执行器位于可选 `AYApplicationUI`，因此
 headless 核心和 AYUI 数据层不获得游戏语义。
 
+阶段九把 command graph 推进为依赖感知的生产调度器。Value Link 同时是数据依赖：消费者即使排在
+producer 前面也会等待其完成，链接存在但 producer 未执行或未返回对应输出时会得到明确失败，而不是
+静默使用默认值。执行边与数据边组成统一 DAG，循环依赖和同一输入连接多个 producer 在启动前拒绝。
+单个执行输入 Pin 保持原有 merge/OR 语义；节点声明多个且均已连接的执行输入 Pin 时形成显式
+all-input Join，缺少任一已激活分支会报告未完成 Join。
+
+执行器仍以稳定顺序调用 handler，但不会因第一个 `Running` 节点冻结整张图：独立 ready 节点会继续
+启动，一张图可同时持有多个异步 continuation。`UIFlowGraphNodeResult::running()` 可声明可选超时和
+取消回调；`update()` 驱动超时，Graph failure、cancel/reverse、`setDocument()`、`reset()` 与析构都会
+先使 continuation 失效，再至多一次通知每个异步宿主。因而 World/Flow 文档卸载不会留下可回写旧图的
+后台节点。Graph 完成仍通过原 completion handler 回到 `UIFlowRuntime`，保持阶段五的状态机边界。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. 参考

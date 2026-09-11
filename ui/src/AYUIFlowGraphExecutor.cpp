@@ -1,6 +1,7 @@
 #include <AYApplication/UIFlowGraphExecutor.h>
 
 #include <algorithm>
+#include <cmath>
 #include <deque>
 #include <exception>
 #include <map>
@@ -60,11 +61,15 @@ UIFlowGraphNodeResult UIFlowGraphNodeResult::completed(
     return result;
 }
 
-UIFlowGraphNodeResult UIFlowGraphNodeResult::running()
+UIFlowGraphNodeResult UIFlowGraphNodeResult::running(
+    double timeout, UIFlowGraphNodeCancellationHandler cancellation)
 {
     UIFlowGraphNodeResult result;
     result.state = UIFlowGraphNodeState::Running;
     result.flowOutput.clear();
+    result.timeoutSeconds = std::isfinite(timeout) && timeout > 0.0
+        ? timeout : 0.0;
+    result.onCancel = std::move(cancellation);
     return result;
 }
 
@@ -84,6 +89,9 @@ public:
     {
         UIFlowGraphNodeExecutionId executionId = 0;
         std::string nodeId;
+        double timeoutSeconds = 0.0;
+        double elapsedSeconds = 0.0;
+        UIFlowGraphNodeCancellationHandler onCancel;
     };
 
     struct Execution
@@ -93,8 +101,10 @@ public:
         std::deque<std::string> ready;
         std::unordered_set<std::string> scheduled;
         std::unordered_set<std::string> completed;
+        std::unordered_map<std::string, std::unordered_set<std::string>>
+            receivedExecutionInputs;
         std::map<std::string, UIFlowPayload, std::less<>> nodeOutputs;
-        std::optional<PendingNode> pending;
+        std::map<UIFlowGraphNodeExecutionId, PendingNode> pending;
     };
 
     enum class DriveState
@@ -131,13 +141,36 @@ public:
             && targetPin->kind == ayt::ui::UIFlowGraphPinKind::Execution;
     }
 
-    bool hasExecutionCycle(
+    bool valueLink(
+        const ayt::ui::UIFlowGraphDefinition& graph,
+        const ayt::ui::UIFlowLinkDefinition& link) const
+    {
+        const auto* source = findNode(graph, link.fromNode);
+        const auto* target = findNode(graph, link.toNode);
+        if (source == nullptr || target == nullptr) return false;
+        const auto* sourceType = registry.find(source->type);
+        const auto* targetType = registry.find(target->type);
+        if (sourceType == nullptr || targetType == nullptr) return false;
+        const auto* sourcePin = ayt::ui::findUIFlowGraphPin(
+            *sourceType, link.fromPin,
+            ayt::ui::UIFlowGraphPinDirection::Output);
+        const auto* targetPin = ayt::ui::findUIFlowGraphPin(
+            *targetType, link.toPin,
+            ayt::ui::UIFlowGraphPinDirection::Input);
+        return sourcePin != nullptr && targetPin != nullptr
+            && sourcePin->kind == ayt::ui::UIFlowGraphPinKind::Value
+            && targetPin->kind == ayt::ui::UIFlowGraphPinKind::Value;
+    }
+
+    bool hasDependencyCycle(
         const ayt::ui::UIFlowGraphDefinition& graph) const
     {
         std::unordered_map<std::string, std::size_t> indegree;
         for (const auto& node : graph.nodes) indegree[node.id] = 0u;
         for (const auto& link : graph.links) {
-            if (executionLink(graph, link)) ++indegree[link.toNode];
+            if (executionLink(graph, link) || valueLink(graph, link)) {
+                ++indegree[link.toNode];
+            }
         }
         std::deque<std::string> ready;
         for (const auto& node : graph.nodes) {
@@ -149,7 +182,9 @@ public:
             ready.pop_front();
             ++visited;
             for (const auto& link : graph.links) {
-                if (link.fromNode != nodeId || !executionLink(graph, link)) {
+                if (link.fromNode != nodeId
+                    || (!executionLink(graph, link)
+                        && !valueLink(graph, link))) {
                     continue;
                 }
                 auto found = indegree.find(link.toNode);
@@ -159,6 +194,127 @@ public:
             }
         }
         return visited != graph.nodes.size();
+    }
+
+    std::string validateDependencies(
+        const ayt::ui::UIFlowGraphDefinition& graph) const
+    {
+        std::unordered_set<std::string> valueTargets;
+        for (const auto& link : graph.links) {
+            if (!valueLink(graph, link)) continue;
+            const std::string target = link.toNode + "\n" + link.toPin;
+            if (!valueTargets.insert(target).second) {
+                return "Value input '" + link.toNode + "." + link.toPin
+                    + "' has multiple producers.";
+            }
+        }
+        if (hasDependencyCycle(graph)) {
+            return "Graph contains an execution/value dependency cycle.";
+        }
+        return {};
+    }
+
+    enum class ValueDependencyState
+    {
+        Ready,
+        Waiting,
+        Invalid,
+    };
+
+    struct ValueDependencyResult
+    {
+        ValueDependencyState state = ValueDependencyState::Ready;
+        std::string message;
+    };
+
+    ValueDependencyResult valueDependenciesFor(
+        const Execution& execution,
+        const ayt::ui::UIFlowNodeDefinition& node) const
+    {
+        for (const auto& link : execution.graph->links) {
+            if (link.toNode != node.id
+                || !valueLink(*execution.graph, link)) {
+                continue;
+            }
+            if (!execution.completed.contains(link.fromNode)) {
+                return {ValueDependencyState::Waiting,
+                    "Node '" + node.id + "' is waiting for value producer '"
+                        + link.fromNode + "'."};
+            }
+            const auto outputNode = execution.nodeOutputs.find(link.fromNode);
+            const auto output = outputNode != execution.nodeOutputs.end()
+                ? outputNode->second.find(link.fromPin)
+                : UIFlowPayload::const_iterator{};
+            if (outputNode == execution.nodeOutputs.end()
+                || output == outputNode->second.end()) {
+                return {ValueDependencyState::Invalid,
+                    "Node '" + link.fromNode
+                        + "' completed without linked value output '"
+                        + link.fromPin + "'."};
+            }
+        }
+        return {};
+    }
+
+    std::unordered_set<std::string> requiredExecutionInputs(
+        const ayt::ui::UIFlowGraphDefinition& graph,
+        std::string_view nodeId) const
+    {
+        std::unordered_set<std::string> result;
+        for (const auto& link : graph.links) {
+            if (link.toNode == nodeId && executionLink(graph, link)) {
+                result.insert(link.toPin);
+            }
+        }
+        return result;
+    }
+
+    void activateNode(Execution& execution, const std::string& nodeId,
+                      std::string_view inputPin = {})
+    {
+        if (execution.completed.contains(nodeId)
+            || execution.scheduled.contains(nodeId)) return;
+        if (!inputPin.empty()) {
+            execution.receivedExecutionInputs[nodeId].insert(
+                std::string(inputPin));
+            const auto required = requiredExecutionInputs(
+                *execution.graph, nodeId);
+            if (required.size() > 1u) {
+                const auto& received = execution.receivedExecutionInputs[nodeId];
+                const bool joined = std::all_of(
+                    required.begin(), required.end(),
+                    [&](const std::string& pin) {
+                        return received.contains(pin);
+                    });
+                if (!joined) return;
+            }
+        }
+        if (execution.scheduled.insert(nodeId).second) {
+            execution.ready.push_back(nodeId);
+        }
+    }
+
+    std::string unresolvedJoinMessage(const Execution& execution) const
+    {
+        for (const auto& node : execution.graph->nodes) {
+            if (execution.scheduled.contains(node.id)
+                || execution.completed.contains(node.id)) {
+                continue;
+            }
+            const auto received = execution.receivedExecutionInputs.find(
+                node.id);
+            if (received == execution.receivedExecutionInputs.end()
+                || received->second.empty()) {
+                continue;
+            }
+            const auto required = requiredExecutionInputs(
+                *execution.graph, node.id);
+            if (required.size() > received->second.size()) {
+                return "Execution join '" + node.id
+                    + "' did not receive every connected input.";
+            }
+        }
+        return {};
     }
 
     UIFlowPayload inputsFor(
@@ -227,10 +383,7 @@ public:
                 || !executionLink(*execution.graph, link)) {
                 continue;
             }
-            if (!execution.completed.contains(link.toNode)
-                && execution.scheduled.insert(link.toNode).second) {
-                execution.ready.push_back(link.toNode);
-            }
+            activateNode(execution, link.toNode, link.toPin);
         }
     }
 
@@ -270,12 +423,24 @@ public:
                        std::string message,
                        bool notify)
     {
+        std::vector<UIFlowGraphNodeCancellationHandler> cancellations;
         const auto found = executions.find(executionId);
         if (found != executions.end()) {
-            if (found->second.pending.has_value()) {
-                nodeExecutions.erase(found->second.pending->executionId);
+            for (auto& [nodeExecutionId, pending] : found->second.pending) {
+                nodeExecutions.erase(nodeExecutionId);
+                if (pending.onCancel) {
+                    cancellations.push_back(std::move(pending.onCancel));
+                }
             }
             executions.erase(found);
+        }
+        for (auto& cancel : cancellations) {
+            try {
+                cancel(UIFlowGraphInterrupt::Cancel);
+            } catch (...) {
+                // Cancellation is a teardown boundary. A faulty host callback
+                // cannot keep an execution alive or escape a noexcept caller.
+            }
         }
         if (notify && completionHandler) {
             completionHandler(executionId, succeeded, message);
@@ -292,19 +457,59 @@ public:
                 return {DriveState::Failed, "Graph execution was interrupted."};
             }
             Execution& execution = executionIt->second;
-            if (execution.pending.has_value()) {
-                return {DriveState::Running, {}};
-            }
             while (!execution.ready.empty()
                    && execution.completed.contains(execution.ready.front())) {
                 execution.ready.pop_front();
             }
-            if (execution.ready.empty()) {
+
+            std::optional<std::string> runnable;
+            std::string waitingMessage;
+            const std::size_t candidateCount = execution.ready.size();
+            for (std::size_t i = 0; i < candidateCount; ++i) {
+                std::string candidate = std::move(execution.ready.front());
+                execution.ready.pop_front();
+                const auto* candidateNode = findNode(
+                    *execution.graph, candidate);
+                if (candidateNode == nullptr) {
+                    return finish(executionId, false,
+                        "Graph scheduled a missing node '" + candidate + "'.",
+                        notify);
+                }
+                const ValueDependencyResult dependency =
+                    valueDependenciesFor(execution, *candidateNode);
+                if (dependency.state == ValueDependencyState::Invalid) {
+                    return finish(executionId, false, dependency.message,
+                                  notify);
+                }
+                if (dependency.state == ValueDependencyState::Waiting) {
+                    if (waitingMessage.empty()) {
+                        waitingMessage = dependency.message;
+                    }
+                    execution.ready.push_back(std::move(candidate));
+                    continue;
+                }
+                runnable = std::move(candidate);
+                break;
+            }
+            if (!runnable.has_value()) {
+                if (!execution.pending.empty()) {
+                    return {DriveState::Running, {}};
+                }
+                if (!execution.ready.empty()) {
+                    return finish(executionId, false,
+                        waitingMessage.empty()
+                            ? "Graph has unresolved value dependencies."
+                            : std::move(waitingMessage),
+                        notify);
+                }
+                const std::string joinError = unresolvedJoinMessage(execution);
+                if (!joinError.empty()) {
+                    return finish(executionId, false, joinError, notify);
+                }
                 return finish(executionId, true, {}, notify);
             }
 
-            const std::string nodeId = std::move(execution.ready.front());
-            execution.ready.pop_front();
+            const std::string nodeId = std::move(*runnable);
             const auto* node = findNode(*execution.graph, nodeId);
             if (node == nullptr) {
                 return finish(executionId, false,
@@ -345,10 +550,15 @@ public:
             }
             Execution& resumed = executionIt->second;
             if (result.state == UIFlowGraphNodeState::Running) {
-                resumed.pending = PendingNode{nodeExecutionId, nodeId};
+                PendingNode pending;
+                pending.executionId = nodeExecutionId;
+                pending.nodeId = nodeId;
+                pending.timeoutSeconds = result.timeoutSeconds;
+                pending.onCancel = std::move(result.onCancel);
+                resumed.pending.emplace(nodeExecutionId, std::move(pending));
                 nodeExecutions[nodeExecutionId] = executionId;
                 appendTrace(resumed, nodeExecutionId, nodeId, "running");
-                return {DriveState::Running, {}};
+                continue;
             }
             if (result.state == UIFlowGraphNodeState::Failed) {
                 const std::string message = result.message.empty()
@@ -379,6 +589,29 @@ public:
     std::vector<UIFlowGraphExecutorTrace> traces;
     UIFlowGraphNodeExecutionId nextNodeExecutionId = 1;
     std::uint64_t nextTraceSerial = 1;
+
+    void abandonExecutions(UIFlowGraphInterrupt interrupt) noexcept
+    {
+        std::vector<UIFlowGraphNodeCancellationHandler> cancellations;
+        for (auto& [executionId, execution] : executions) {
+            (void)executionId;
+            for (auto& [nodeExecutionId, pending] : execution.pending) {
+                (void)nodeExecutionId;
+                if (pending.onCancel) {
+                    cancellations.push_back(std::move(pending.onCancel));
+                }
+            }
+        }
+        nodeExecutions.clear();
+        executions.clear();
+        for (auto& cancel : cancellations) {
+            try {
+                cancel(interrupt);
+            } catch (...) {
+            }
+        }
+    }
+
 };
 
 UIFlowGraphExecutor::UIFlowGraphExecutor()
@@ -386,16 +619,28 @@ UIFlowGraphExecutor::UIFlowGraphExecutor()
 {
 }
 
-UIFlowGraphExecutor::~UIFlowGraphExecutor() = default;
+UIFlowGraphExecutor::~UIFlowGraphExecutor()
+{
+    if (_impl != nullptr) {
+        _impl->abandonExecutions(UIFlowGraphInterrupt::Cancel);
+    }
+}
 UIFlowGraphExecutor::UIFlowGraphExecutor(UIFlowGraphExecutor&&) noexcept = default;
 UIFlowGraphExecutor& UIFlowGraphExecutor::operator=(
-    UIFlowGraphExecutor&&) noexcept = default;
+    UIFlowGraphExecutor&& other) noexcept
+{
+    if (this == &other) return *this;
+    if (_impl != nullptr) {
+        _impl->abandonExecutions(UIFlowGraphInterrupt::Cancel);
+    }
+    _impl = std::move(other._impl);
+    return *this;
+}
 
 void UIFlowGraphExecutor::setDocument(
     const ayt::ui::UIFlowDocument* document) noexcept
 {
-    _impl->executions.clear();
-    _impl->nodeExecutions.clear();
+    _impl->abandonExecutions(UIFlowGraphInterrupt::Cancel);
     _impl->document = document;
 }
 
@@ -488,9 +733,9 @@ UIFlowGraphStartResult UIFlowGraphExecutor::start(
         return UIFlowGraphStartResult::rejected(
             diagnosticMessage(diagnostics));
     }
-    if (_impl->hasExecutionCycle(*graph)) {
-        return UIFlowGraphStartResult::rejected(
-            "Graph contains an execution cycle.");
+    const std::string dependencyError = _impl->validateDependencies(*graph);
+    if (!dependencyError.empty()) {
+        return UIFlowGraphStartResult::rejected(dependencyError);
     }
 
     Impl::Execution execution;
@@ -502,8 +747,7 @@ UIFlowGraphStartResult UIFlowGraphExecutor::start(
     }
     for (const auto& node : graph->nodes) {
         if (!incoming.contains(node.id)) {
-            execution.ready.push_back(node.id);
-            execution.scheduled.insert(node.id);
+            _impl->activateNode(execution, node.id);
         }
     }
     _impl->executions.emplace(request.executionId, std::move(execution));
@@ -535,13 +779,13 @@ bool UIFlowGraphExecutor::completeNode(
     _impl->nodeExecutions.erase(executionId);
     auto execution = _impl->executions.find(graphExecutionId);
     if (execution == _impl->executions.end()
-        || !execution->second.pending.has_value()
-        || execution->second.pending->executionId != nodeExecutionId) {
+        || !execution->second.pending.contains(nodeExecutionId)) {
         if (error != nullptr) *error = "Pending node state is inconsistent.";
         return false;
     }
-    const std::string nodeId = execution->second.pending->nodeId;
-    execution->second.pending.reset();
+    const std::string nodeId =
+        execution->second.pending.at(nodeExecutionId).nodeId;
+    execution->second.pending.erase(nodeExecutionId);
     if (result.state == UIFlowGraphNodeState::Failed) {
         const std::string message = result.message.empty()
             ? "Node '" + nodeId + "' failed." : result.message;
@@ -579,23 +823,66 @@ bool UIFlowGraphExecutor::completeNode(
     return true;
 }
 
+void UIFlowGraphExecutor::update(double deltaSeconds)
+{
+    if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0) return;
+    std::vector<std::pair<UIFlowGraphExecutionId,
+                          UIFlowGraphNodeExecutionId>> expired;
+    for (auto& [executionId, execution] : _impl->executions) {
+        for (auto& [nodeExecutionId, pending] : execution.pending) {
+            if (pending.timeoutSeconds <= 0.0) continue;
+            pending.elapsedSeconds += deltaSeconds;
+            if (pending.elapsedSeconds >= pending.timeoutSeconds) {
+                expired.emplace_back(executionId, nodeExecutionId);
+            }
+        }
+    }
+    std::sort(expired.begin(), expired.end());
+    std::unordered_set<UIFlowGraphExecutionId> finished;
+    for (const auto& [executionId, nodeExecutionId] : expired) {
+        if (!finished.insert(executionId).second) continue;
+        const auto execution = _impl->executions.find(executionId);
+        if (execution == _impl->executions.end()) continue;
+        const auto pending = execution->second.pending.find(nodeExecutionId);
+        if (pending == execution->second.pending.end()) continue;
+        const std::string nodeId = pending->second.nodeId;
+        _impl->appendTrace(execution->second, nodeExecutionId, nodeId,
+                           "timeout");
+        (void)_impl->finish(executionId, false,
+            "Node '" + nodeId + "' timed out.", true);
+    }
+}
+
 bool UIFlowGraphExecutor::interruptGraph(
     UIFlowGraphExecutionId executionId,
     UIFlowGraphInterrupt interrupt) noexcept
 {
     const auto found = _impl->executions.find(executionId);
     if (found == _impl->executions.end()) return false;
+    UIFlowGraphNodeExecutionId tracedNode = 0u;
+    std::string tracedNodeId;
+    if (!found->second.pending.empty()) {
+        tracedNode = found->second.pending.begin()->first;
+        tracedNodeId = found->second.pending.begin()->second.nodeId;
+    }
     _impl->appendTrace(found->second,
-        found->second.pending.has_value()
-            ? found->second.pending->executionId : 0u,
-        found->second.pending.has_value()
-            ? found->second.pending->nodeId : std::string{},
+        tracedNode, std::move(tracedNodeId),
         interrupt == UIFlowGraphInterrupt::Reverse
             ? "interrupted:reverse" : "interrupted:cancel");
-    if (found->second.pending.has_value()) {
-        _impl->nodeExecutions.erase(found->second.pending->executionId);
+    std::vector<UIFlowGraphNodeCancellationHandler> cancellations;
+    for (auto& [nodeExecutionId, pending] : found->second.pending) {
+        _impl->nodeExecutions.erase(nodeExecutionId);
+        if (pending.onCancel) {
+            cancellations.push_back(std::move(pending.onCancel));
+        }
     }
     _impl->executions.erase(found);
+    for (auto& cancel : cancellations) {
+        try {
+            cancel(interrupt);
+        } catch (...) {
+        }
+    }
     return true;
 }
 
@@ -634,8 +921,7 @@ void UIFlowGraphExecutor::clearTrace() noexcept
 
 void UIFlowGraphExecutor::reset() noexcept
 {
-    _impl->executions.clear();
-    _impl->nodeExecutions.clear();
+    _impl->abandonExecutions(UIFlowGraphInterrupt::Cancel);
 }
 
 } // namespace ayt::app
