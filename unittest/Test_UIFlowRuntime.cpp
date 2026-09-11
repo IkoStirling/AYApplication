@@ -1,4 +1,5 @@
 #include <AYApplication/UIFlowAssetValidation.h>
+#include <AYApplication/UIFlowGraphExecutor.h>
 #include <AYApplication/UIFlowRuntime.h>
 #include <AYApplication/UIManagerFlowScreenHost.h>
 #include <AYTest.h>
@@ -1121,6 +1122,231 @@ TEST_CASE(flow_asset_validation_reports_missing_clips_files_and_root_escape)
           == "$.screens[0].enterAnimation");
     CHECK(result.diagnostics.front().message.find("unresolved")
           != std::string::npos);
+}
+
+TEST_CASE(graph_executor_routes_execution_and_typed_values_deterministically)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    UIFlowDocument document;
+    document.graphs.push_back({"load", {
+        {"source", "test.source", {}},
+        {"target", "test.target", {{"fallback", std::int64_t{3}}}},
+    }, {
+        {"source", "completed", "target", "execute"},
+        {"source", "value", "target", "value"},
+    }});
+
+    UIFlowGraphExecutor executor;
+    executor.setDocument(&document);
+    ayt::ui::UIFlowGraphNodeTypeDefinition source;
+    source.type = "test.source";
+    source.pins = {
+        {"execute", Direction::Input, Kind::Execution},
+        {"completed", Direction::Output, Kind::Execution},
+        {"value", Direction::Output, Kind::Value,
+         ayt::ui::UIFlowValueType::Integer},
+    };
+    ayt::ui::UIFlowGraphNodeTypeDefinition target;
+    target.type = "test.target";
+    target.pins = {
+        {"execute", Direction::Input, Kind::Execution},
+        {"completed", Direction::Output, Kind::Execution},
+        {"value", Direction::Input, Kind::Value,
+         ayt::ui::UIFlowValueType::Number},
+    };
+    std::vector<std::string> order;
+    CHECK(executor.registerNodeType(std::move(source),
+        [&order](const UIFlowGraphNodeInvocation&) {
+            order.push_back("source");
+            return UIFlowGraphNodeResult::completed(
+                "completed", {{"value", std::int64_t{42}}});
+        }));
+    CHECK(executor.registerNodeType(std::move(target),
+        [&order](const UIFlowGraphNodeInvocation& invocation) {
+            order.push_back("target");
+            CHECK(std::get<std::int64_t>(
+                invocation.inputs.at("value").data) == 42);
+            CHECK(std::get<std::int64_t>(
+                invocation.inputs.at("fallback").data) == 3);
+            return UIFlowGraphNodeResult::completed();
+        }));
+
+    const UIFlowGraphStartResult result = executor.start(
+        {7u, UIFlowGraphRequest{"load"}});
+    CHECK(result.state == UIFlowGraphStartState::Completed);
+    CHECK(order.size() == 2u);
+    CHECK(order[0] == "source");
+    CHECK(order[1] == "target");
+    CHECK(executor.pendingGraphCount() == 0u);
+    CHECK(executor.trace().size() == 4u);
+
+    const auto* registeredSource = executor.nodeTypes().find("test.source");
+    CHECK(registeredSource != nullptr);
+    if (registeredSource != nullptr) {
+        CHECK(executor.registerNodeType(*registeredSource,
+            [](const UIFlowGraphNodeInvocation&) {
+                return UIFlowGraphNodeResult::completed(
+                    "completed", {{"value", std::string("wrong")}});
+            }, true));
+        const UIFlowGraphStartResult invalid = executor.start(
+            {8u, UIFlowGraphRequest{"load"}});
+        CHECK(invalid.state == UIFlowGraphStartState::Rejected);
+        CHECK(invalid.message.find("wrong type") != std::string::npos);
+        CHECK(executor.pendingGraphCount() == 0u);
+    }
+}
+
+TEST_CASE(graph_executor_resumes_async_nodes_and_notifies_runtime_boundary)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    UIFlowDocument document;
+    document.graphs.push_back({"async", {
+        {"wait", "test.wait", {}},
+        {"finish", "test.finish", {}},
+    }, {{"wait", "completed", "finish", "execute"}}});
+
+    UIFlowGraphExecutor executor;
+    executor.setDocument(&document);
+    const std::vector<ayt::ui::UIFlowGraphPinTypeDefinition> commandPins = {
+        {"execute", Direction::Input, Kind::Execution},
+        {"completed", Direction::Output, Kind::Execution},
+    };
+    UIFlowGraphNodeExecutionId pendingNode = 0u;
+    bool finishRan = false;
+    bool completionCalled = false;
+    bool completionSucceeded = false;
+    CHECK(executor.registerNodeType(
+        {"test.wait", "Wait", "Test", commandPins, {}},
+        [&pendingNode](const UIFlowGraphNodeInvocation& invocation) {
+            pendingNode = invocation.nodeExecutionId;
+            return UIFlowGraphNodeResult::running();
+        }));
+    CHECK(executor.registerNodeType(
+        {"test.finish", "Finish", "Test", commandPins, {}},
+        [&finishRan](const UIFlowGraphNodeInvocation&) {
+            finishRan = true;
+            return UIFlowGraphNodeResult::completed();
+        }));
+    executor.setCompletionHandler(
+        [&completionCalled, &completionSucceeded](
+            UIFlowGraphExecutionId id, bool succeeded, std::string) {
+            CHECK(id == 11u);
+            completionCalled = true;
+            completionSucceeded = succeeded;
+        });
+
+    const UIFlowGraphStartResult started = executor.start(
+        {11u, UIFlowGraphRequest{"async"}});
+    CHECK(started.state == UIFlowGraphStartState::Running);
+    CHECK(pendingNode != 0u);
+    CHECK(executor.pendingNodeCount() == 1u);
+    CHECK_FALSE(finishRan);
+    CHECK(executor.completeNode(
+        pendingNode, UIFlowGraphNodeResult::completed()));
+    CHECK(finishRan);
+    CHECK(completionCalled);
+    CHECK(completionSucceeded);
+    CHECK(executor.pendingGraphCount() == 0u);
+}
+
+TEST_CASE(graph_executor_rejects_cycles_and_cancels_pending_work)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    const std::vector<ayt::ui::UIFlowGraphPinTypeDefinition> commandPins = {
+        {"execute", Direction::Input, Kind::Execution},
+        {"completed", Direction::Output, Kind::Execution},
+    };
+    UIFlowDocument document;
+    document.graphs.push_back({"cycle", {
+        {"a", "test.command", {}}, {"b", "test.command", {}}
+    }, {
+        {"a", "completed", "b", "execute"},
+        {"b", "completed", "a", "execute"},
+    }});
+    document.graphs.push_back({"pending", {
+        {"wait", "test.wait", {}}
+    }, {}});
+    UIFlowGraphExecutor executor;
+    executor.setDocument(&document);
+    CHECK(executor.registerNodeType(
+        {"test.command", "Command", "Test", commandPins, {}},
+        [](const UIFlowGraphNodeInvocation&) {
+            return UIFlowGraphNodeResult::completed();
+        }));
+    UIFlowGraphNodeExecutionId pendingNode = 0u;
+    CHECK(executor.registerNodeType(
+        {"test.wait", "Wait", "Test", commandPins, {}},
+        [&pendingNode](const UIFlowGraphNodeInvocation& invocation) {
+            pendingNode = invocation.nodeExecutionId;
+            return UIFlowGraphNodeResult::running();
+        }));
+
+    const UIFlowGraphStartResult cycle = executor.start(
+        {21u, UIFlowGraphRequest{"cycle"}});
+    CHECK(cycle.state == UIFlowGraphStartState::Rejected);
+    CHECK(cycle.message.find("cycle") != std::string::npos);
+    CHECK(executor.start({22u, UIFlowGraphRequest{"pending"}}).state
+          == UIFlowGraphStartState::Running);
+    CHECK(executor.interruptGraph(22u, UIFlowGraphInterrupt::Cancel));
+    CHECK_FALSE(executor.hasPendingGraph(22u));
+    std::string error;
+    CHECK_FALSE(executor.completeNode(
+        pendingNode, UIFlowGraphNodeResult::completed(), &error));
+    CHECK(error.find("Unknown") != std::string::npos);
+}
+
+TEST_CASE(graph_executor_plugs_into_runtime_graph_pipeline)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    UIFlowDocument document = stateDocument();
+    for (auto& graph : document.graphs) {
+        if (graph.id == "start_game") {
+            graph.nodes.push_back({"invoke", "test.runtime", {}});
+        }
+    }
+    RecordingScreenHost host;
+    UIFlowRuntime runtime(host);
+    CHECK(runtime.load(std::move(document)));
+
+    UIFlowGraphExecutor executor;
+    executor.setDocument(runtime.document());
+    int nodeRuns = 0;
+    CHECK(executor.registerNodeType(
+        {"test.runtime", "Runtime", "Test", {
+            {"execute", Direction::Input, Kind::Execution},
+            {"completed", Direction::Output, Kind::Execution},
+        }, {}},
+        [&nodeRuns](const UIFlowGraphNodeInvocation& invocation) {
+            ++nodeRuns;
+            CHECK(invocation.request.signalId == "start");
+            return UIFlowGraphNodeResult::completed();
+        }));
+    executor.setCompletionHandler(
+        [&runtime](UIFlowGraphExecutionId id, bool succeeded,
+                   std::string message) {
+            (void)runtime.completeGraphExecution(
+                id, succeeded, std::move(message));
+        });
+    runtime.setAsyncGraphRequestHandler(
+        [&executor](const UIFlowGraphExecutionRequest& request) {
+            return executor.start(request);
+        },
+        [&executor](UIFlowGraphExecutionId id, UIFlowGraphInterrupt value) {
+            (void)executor.interruptGraph(id, value);
+        });
+    runtime.setGuardEvaluator(
+        [](std::string_view, const UIFlowPayload&, std::string&) {
+            return true;
+        });
+    CHECK(runtime.start());
+    CHECK(runtime.emitSignal("start", {{"allowed", true}}));
+    CHECK(nodeRuns == 1);
+    CHECK(runtime.activeState("application") == "game");
+    CHECK_FALSE(runtime.hasPendingGraphExecution());
 }
 
 TEST_SUITE_END

@@ -1245,6 +1245,16 @@ ignore/cancel/reverse 中断策略；`completeGraphExecution()` 驱动 exit → 
 避免 Host 或热重载 Loader 持有悬空 Runtime；Screen 映射变化属于 mount identity，会触发事务式重挂。
 Full Client 资产审计同时递归收集布局事件处理器，提前报告映射到不存在 handler 的 Screen。
 
+阶段八增加 `UIFlowGraphExecutor`，把阶段五的异步 Graph request 从生命周期协议推进为可执行
+command graph。宿主以 `UIFlowGraphNodeTypeDefinition + UIFlowGraphNodeHandler` 注册能力；执行器先用
+AYUI 的严格 Pin contract 校验图，再按 execution link 确定性串行运行。节点 property/default 和已完成
+上游的 value output 合并为 invocation inputs；`Running` 节点通过稳定 node execution ID 在后续
+`completeNode()` 继续，Graph 完成回调再调用 `UIFlowRuntime::completeGraphExecution()` 推进状态机。
+执行环、重复 execution ID、未知类型/Pin、handler 异常和失败结果都在边界收敛；cancel/reverse 会使旧
+continuation 失效。Completed result 的 flow output、value output 名称和实际值类型也会对照 registry
+复核，错误 host handler 不能把不匹配的数据继续传播。执行器位于可选 `AYApplicationUI`，因此
+headless 核心和 AYUI 数据层不获得游戏语义。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. 参考

@@ -128,6 +128,7 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 if(TARGET AYUI)
     add_library(AYApplicationUI STATIC
         ui/src/AYUIFlowAssetValidation.cpp
+        ui/src/AYUIFlowGraphExecutor.cpp
         ui/src/AYUIFlowSceneBridge.cpp
         ui/src/AYUIFlowSceneBridgeModule.cpp
         ui/src/AYUIFlowSceneComponents.cpp
@@ -135,6 +136,7 @@ if(TARGET AYUI)
         ui/src/AYUIFlowRuntimeModule.cpp
         ui/src/AYUIManagerFlowScreenHost.cpp
         ui/include/AYApplication/UIFlowAssetValidation.h
+        ui/include/AYApplication/UIFlowGraphExecutor.h
         ui/include/AYApplication/UIFlowSceneBridge.h
         ui/include/AYApplication/UIFlowSceneBridgeModule.h
         ui/include/AYApplication/UIFlowSceneComponents.h
