@@ -3,6 +3,7 @@
 #include <AYApplication/UIManagerFlowScreenHost.h>
 #include <AYTest.h>
 #include <AYUI/Animation.h>
+#include <AYUI/Button.h>
 #include <AYUI/UIManager.h>
 
 #include <algorithm>
@@ -626,6 +627,43 @@ TEST_CASE(ui_manager_host_mounts_independent_layout_and_widget_registry)
     CHECK(host.findWidget(17, "flow_fixture_button") == nullptr);
 }
 
+TEST_CASE(widget_declarative_event_emits_declared_flow_signal)
+{
+    UIManager manager;
+    manager.initialize(nullptr);
+    manager.setClientSize(640.0f, 360.0f);
+    UIManagerFlowScreenHost host(
+        manager, AY_APPLICATION_UI_TEST_ASSET_ROOT);
+    UIFlowRuntime runtime(host);
+    UIFlowDocument document = arbitrationDocument();
+    document.screens[0].layoutAsset = "ui_flow_screen.ui.json";
+    document.screens[0].events.push_back(
+        {"continueFlow", "ui.continue"});
+    document.signals.push_back({"ui.continue", {}});
+    int emissions = 0;
+    CHECK(runtime.load(std::move(document)));
+    CHECK(runtime.subscribeSignal("ui.continue",
+        [&emissions](std::string_view, const UIFlowPayload&) {
+            ++emissions;
+        }) != 0u);
+    CHECK(runtime.start());
+    auto* button = dynamic_cast<Button*>(
+        host.findWidget(runtime.mountedScreens().front().mountId,
+                        "flow_fixture_button"));
+    CHECK(button != nullptr);
+    if (button != nullptr) {
+        const auto bounds = button->getWorldBounds();
+        const UIMouseEvent click({(bounds.minX + bounds.maxX) * 0.5f,
+                                  (bounds.minY + bounds.maxY) * 0.5f}, 0);
+        CHECK(button->onMouseMove(click));
+        CHECK(button->onMouseButtonDown(click));
+        CHECK(button->onMouseButtonUp(click));
+    }
+    CHECK(emissions == 1);
+    CHECK(runtime.replaySignals().size() == 1u);
+    CHECK(runtime.replaySignals().front().signalId == "ui.continue");
+}
+
 TEST_CASE(ui_manager_pass_through_layer_ignores_blank_screen_surface)
 {
     ayt::ui::UIManager manager;
@@ -1004,6 +1042,8 @@ TEST_CASE(flow_asset_validation_builds_deduplicated_deployable_dependencies)
     document.screens[0].enterAnimation = "flow.enter";
     document.screens[1].layoutAsset = "ui_flow_screen.ui.json";
     document.screens[1].exitAnimation = "flow.exit";
+    document.signals.push_back({"ui.continue", {}});
+    document.screens[0].events.push_back({"continueFlow", "ui.continue"});
 
     const UIFlowAssetValidationResult result = validateUIFlowAssets(
         document, AY_APPLICATION_UI_TEST_ASSET_ROOT);
@@ -1015,6 +1055,37 @@ TEST_CASE(flow_asset_validation_builds_deduplicated_deployable_dependencies)
     CHECK(result.dependencies.front().screens.size() == 2u);
     CHECK(result.dependencies.front().screens[0] == "menu");
     CHECK(result.dependencies.front().screens[1] == "pause");
+}
+
+TEST_CASE(flow_asset_validation_reports_unresolved_layout_event_handler)
+{
+    UIFlowDocument document = arbitrationDocument();
+    document.screens[0].layoutAsset = "ui_flow_screen.ui.json";
+    document.signals.push_back({"ui.continue", {}});
+    document.screens[0].events.push_back({"missingHandler", "ui.continue"});
+    document.screens[1].layoutAsset = "ui_flow_screen.ui.json";
+
+    const UIFlowAssetValidationResult result = validateUIFlowAssets(
+        document, AY_APPLICATION_UI_TEST_ASSET_ROOT);
+    CHECK_FALSE(result.valid());
+    CHECK(result.diagnostics.size() == 1u);
+    CHECK(result.diagnostics.front().path
+          == "$.screens[0].events[0].handler");
+}
+
+TEST_CASE(flow_asset_validation_indexes_events_in_inactive_structured_content)
+{
+    UIFlowDocument document = arbitrationDocument();
+    document.screens[0].layoutAsset = "ui_flow_tab_screen.ui.json";
+    document.screens[1].layoutAsset = "ui_flow_tab_screen.ui.json";
+    document.signals.push_back({"ui.continue", {}});
+    document.screens[0].events.push_back(
+        {"continueFromInactiveTab", "ui.continue"});
+
+    const UIFlowAssetValidationResult result = validateUIFlowAssets(
+        document, AY_APPLICATION_UI_TEST_ASSET_ROOT);
+    CHECK(result.valid());
+    CHECK(result.diagnostics.empty());
 }
 
 TEST_CASE(flow_asset_validation_reports_missing_clips_files_and_root_escape)

@@ -48,7 +48,13 @@ struct UIFlowScreenMountRequest
     std::string enterAnimation;
     std::string exitAnimation;
     UIFlowPayload parameters;
+    std::vector<ayt::ui::UIFlowScreenEventBinding> events;
 };
+
+using UIFlowScreenSignalEmitter = std::function<bool(
+    std::string_view signalId,
+    UIFlowPayload payload,
+    std::string* error)>;
 
 // Presentation adapter. The runtime owns logical orchestration and mount IDs;
 // the host owns actual Widget trees, native views, or a headless test model.
@@ -65,6 +71,9 @@ public:
         std::uint64_t mountId,
         int layerOrder,
         std::uint32_t orderInLayer) noexcept = 0;
+    virtual void setSignalEmitter(UIFlowScreenSignalEmitter emitter) {
+        (void)emitter;
+    }
     virtual void update(float deltaSeconds) { (void)deltaSeconds; }
 };
 
@@ -87,6 +96,7 @@ struct UIFlowMountedScreen
     std::string enterAnimation;
     std::string exitAnimation;
     UIFlowPayload parameters;
+    std::vector<ayt::ui::UIFlowScreenEventBinding> events;
 };
 
 struct UIFlowActionInvocation

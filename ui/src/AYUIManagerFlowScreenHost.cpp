@@ -371,6 +371,23 @@ public:
         manager.invalidateLayout();
     }
 
+    std::function<void()> resolveScreenEvent(
+        const std::vector<ayt::ui::UIFlowScreenEventBinding>& bindings,
+        std::string_view handler)
+    {
+        const auto found = std::find_if(
+            bindings.begin(), bindings.end(), [&](const auto& value) {
+                return value.handler == handler;
+            });
+        if (found == bindings.end()) return {};
+        const std::string signal = found->signal;
+        return [this, signal]() {
+            if (!signalEmitter) return;
+            std::string ignored;
+            (void)signalEmitter(signal, {}, &ignored);
+        };
+    }
+
     ayt::ui::UIManager& manager;
     std::string assetRoot;
     ayt::ui::Widget* mountParent = nullptr;
@@ -380,6 +397,7 @@ public:
     std::unordered_map<std::uint64_t, MountRecord> mounts;
     std::vector<MountRecord> retiringMounts;
     std::uint64_t nextLayerSerial = 1;
+    UIFlowScreenSignalEmitter signalEmitter;
 };
 
 UIManagerFlowScreenHost::UIManagerFlowScreenHost(
@@ -411,6 +429,13 @@ bool UIManagerFlowScreenHost::mountScreen(
     if (!error.empty() || path.empty()) return false;
 
     auto loader = std::make_unique<ayt::ui::UILayoutLoader>();
+    const auto eventBindings = request.events;
+    loader->setDeclarativeEventResolver(
+        [impl = _impl.get(), eventBindings](
+            const ayt::ui::Widget&, std::string_view,
+            std::string_view handler) {
+            return impl->resolveScreenEvent(eventBindings, handler);
+        });
     ayt::ui::Widget* root = loader->loadFromFile(path.string());
     if (root == nullptr) {
         error = "Cannot load layout '" + path.string() + "'.";
@@ -473,6 +498,12 @@ void UIManagerFlowScreenHost::setScreenOrder(
     found->second.layer->order = layerOrder;
     _impl->sortLayers();
     _impl->sortScreens(*found->second.layer);
+}
+
+void UIManagerFlowScreenHost::setSignalEmitter(
+    UIFlowScreenSignalEmitter emitter)
+{
+    _impl->signalEmitter = std::move(emitter);
 }
 
 void UIManagerFlowScreenHost::update(float deltaSeconds)

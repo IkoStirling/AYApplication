@@ -482,6 +482,7 @@ public:
             && mounted.blocksLowerInput == desired.layer->blocksLowerInput
             && mounted.enterAnimation == desired.screen->enterAnimation
             && mounted.exitAnimation == desired.screen->exitAnimation
+            && mounted.events == desired.screen->events
             && samePayload(mounted.parameters, desired.screen->parameters);
     }
 
@@ -528,6 +529,7 @@ public:
                 request.enterAnimation = item.screen->enterAnimation;
                 request.exitAnimation = item.screen->exitAnimation;
                 request.parameters = item.screen->parameters;
+                request.events = item.screen->events;
                 std::string mountError;
                 bool mountedSuccessfully = false;
                 try {
@@ -566,6 +568,7 @@ public:
             value.enterAnimation = item.screen->enterAnimation;
             value.exitAnimation = item.screen->exitAnimation;
             value.parameters = item.screen->parameters;
+            value.events = item.screen->events;
             next.push_back(std::move(value));
         }
 
@@ -1012,6 +1015,69 @@ public:
         return valid;
     }
 
+    bool emitSignal(std::string_view signalId, UIFlowPayload payload,
+                    std::string* error)
+    {
+        if (!started) {
+            setLastError("UI Flow is not started.", error);
+            return false;
+        }
+        const ayt::ui::UIFlowSignalDefinition* definition =
+            document.findSignal(signalId);
+        if (definition == nullptr) {
+            setLastError(
+                "Unknown UI Flow Signal '" + std::string(signalId) + "'.",
+                error);
+            return false;
+        }
+        UIFlowPayload normalized;
+        std::string payloadError;
+        if (!normalizePayload(
+                definition->payload, payload, normalized,
+                "Signal", signalId, payloadError)) {
+            setLastError(std::move(payloadError), error);
+            return false;
+        }
+        signalQueue.push_back(
+            QueuedSignal{std::string(signalId), std::move(normalized)});
+        appendTrace("Signal", std::string(signalId), "accepted");
+        if (!replaying) {
+            replayLog.push_back(UIFlowReplaySignal{
+                std::string(signalId), signalQueue.back().payload});
+        }
+        if (dispatchingSignals) {
+            clearLastError(error);
+            return true;
+        }
+
+        dispatchingSignals = true;
+        bool valid = true;
+        std::string dispatchError;
+        std::size_t processed = 0;
+        while (!signalQueue.empty() && processed < 1024u) {
+            QueuedSignal signal = std::move(signalQueue.front());
+            signalQueue.pop_front();
+            valid = processSignal(signal, dispatchError) && valid;
+            ++processed;
+        }
+        if (!signalQueue.empty()) {
+            signalQueue.clear();
+            dispatchError =
+                "Signal dispatch exceeded the 1024-event reentrancy limit.";
+            valid = false;
+        }
+        dispatchingSignals = false;
+        if (!valid) {
+            setLastError(
+                dispatchError.empty() ? "UI Flow signal dispatch failed."
+                                      : std::move(dispatchError),
+                error);
+            return false;
+        }
+        clearLastError(error);
+        return true;
+    }
+
     IUIFlowScreenHost& host;
     ayt::ui::UIFlowDocument document;
     bool loaded = false;
@@ -1048,18 +1114,30 @@ public:
 UIFlowRuntime::UIFlowRuntime(IUIFlowScreenHost& screenHost)
     : _impl(std::make_unique<Impl>(screenHost))
 {
+    Impl* impl = _impl.get();
+    screenHost.setSignalEmitter(
+        [impl](std::string_view signalId, UIFlowPayload payload,
+               std::string* error) {
+            return impl->emitSignal(signalId, std::move(payload), error);
+        });
 }
 
 UIFlowRuntime::~UIFlowRuntime()
 {
-    unload();
+    if (_impl != nullptr) {
+        _impl->host.setSignalEmitter({});
+        unload();
+    }
 }
 
 UIFlowRuntime::UIFlowRuntime(UIFlowRuntime&&) noexcept = default;
 UIFlowRuntime& UIFlowRuntime::operator=(UIFlowRuntime&& other) noexcept
 {
     if (this == &other) return *this;
-    unload();
+    if (_impl != nullptr) {
+        _impl->host.setSignalEmitter({});
+        unload();
+    }
     _impl = std::move(other._impl);
     return *this;
 }
@@ -1524,63 +1602,7 @@ bool UIFlowRuntime::emitSignal(
     UIFlowPayload payload,
     std::string* error)
 {
-    if (!_impl->started) {
-        _impl->setLastError("UI Flow is not started.", error);
-        return false;
-    }
-    const ayt::ui::UIFlowSignalDefinition* definition =
-        _impl->document.findSignal(signalId);
-    if (definition == nullptr) {
-        _impl->setLastError(
-            "Unknown UI Flow Signal '" + std::string(signalId) + "'.",
-            error);
-        return false;
-    }
-    UIFlowPayload normalized;
-    std::string payloadError;
-    if (!normalizePayload(
-            definition->payload, payload, normalized,
-            "Signal", signalId, payloadError)) {
-        _impl->setLastError(std::move(payloadError), error);
-        return false;
-    }
-    _impl->signalQueue.push_back(
-        Impl::QueuedSignal{std::string(signalId), std::move(normalized)});
-    _impl->appendTrace("Signal", std::string(signalId), "accepted");
-    if (!_impl->replaying) {
-        _impl->replayLog.push_back(UIFlowReplaySignal{
-            std::string(signalId), _impl->signalQueue.back().payload});
-    }
-    if (_impl->dispatchingSignals) {
-        _impl->clearLastError(error);
-        return true;
-    }
-
-    _impl->dispatchingSignals = true;
-    bool valid = true;
-    std::string dispatchError;
-    std::size_t processed = 0;
-    while (!_impl->signalQueue.empty() && processed < 1024u) {
-        Impl::QueuedSignal signal = std::move(_impl->signalQueue.front());
-        _impl->signalQueue.pop_front();
-        valid = _impl->processSignal(signal, dispatchError) && valid;
-        ++processed;
-    }
-    if (!_impl->signalQueue.empty()) {
-        _impl->signalQueue.clear();
-        dispatchError = "Signal dispatch exceeded the 1024-event reentrancy limit.";
-        valid = false;
-    }
-    _impl->dispatchingSignals = false;
-    if (!valid) {
-        _impl->setLastError(
-            dispatchError.empty() ? "UI Flow signal dispatch failed."
-                                  : std::move(dispatchError),
-            error);
-        return false;
-    }
-    _impl->clearLastError(error);
-    return true;
+    return _impl->emitSignal(signalId, std::move(payload), error);
 }
 
 UIFlowSignalSubscription UIFlowRuntime::subscribeSignal(

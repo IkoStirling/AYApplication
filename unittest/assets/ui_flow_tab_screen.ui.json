@@ -1,0 +1,25 @@
+{
+  "type": "TabControl",
+  "id": "flow_tabs",
+  "selectedIndex": 0,
+  "tabs": [
+    {
+      "label": "Visible",
+      "content": { "type": "Panel", "id": "visible_page" }
+    },
+    {
+      "label": "Inactive",
+      "content": {
+        "type": "Panel",
+        "id": "inactive_page",
+        "children": [
+          {
+            "type": "Button",
+            "id": "inactive_button",
+            "events": { "onClick": "continueFromInactiveTab" }
+          }
+        ]
+      }
+    }
+  ]
+}

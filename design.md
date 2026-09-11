@@ -1238,6 +1238,13 @@ ignore/cancel/reverse 中断策略；`completeGraphExecution()` 驱动 exit → 
 `StructureOnly` profile 只做契约、路径和文件闭包检查，保持 headless 验证不构造 Widget；
 `FullClient` profile 才执行真实布局和动画验证。
 
+阶段七闭合 Widget 到 Flow 的生产交互路径。Screen 定义可声明 `handler -> Signal` 映射；
+`UIManagerFlowScreenHost` 为每个独立 Loader 安装动态事件 resolver，把布局中的 `onClick` 等语义
+处理器转成空动态 payload 的 Flow Signal。显式注册的 controller/global handler 仍优先，未知处理器
+继续保持无行为。Runtime 在构造时把稳定的 emitter 注入 Screen Host，析构和 move-assignment 前清除，
+避免 Host 或热重载 Loader 持有悬空 Runtime；Screen 映射变化属于 mount identity，会触发事务式重挂。
+Full Client 资产审计同时递归收集布局事件处理器，提前报告映射到不存在 handler 的 Screen。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. 参考

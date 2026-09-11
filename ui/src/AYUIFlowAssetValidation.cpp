@@ -45,6 +45,7 @@ struct LoadedLayout
     std::string error;
     std::set<std::string, std::less<>> clips;
     std::map<std::string, std::size_t, std::less<>> unresolvedTracks;
+    std::set<std::string, std::less<>> eventHandlers;
 };
 
 } // namespace
@@ -128,6 +129,10 @@ UIFlowAssetValidationResult validateUIFlowAssets(
                         }
                         loaded.unresolvedTracks.emplace(clip.name, unresolved);
                     }
+                    const auto& eventHandlers =
+                        loader.getDeclarativeEventHandlers();
+                    loaded.eventHandlers.insert(
+                        eventHandlers.begin(), eventHandlers.end());
                     ayt::ui::destroyWidgetTree(rootWidget);
                 }
             }
@@ -158,6 +163,17 @@ UIFlowAssetValidationResult validateUIFlowAssets(
         };
         validateAnimation("enterAnimation", screen.enterAnimation);
         validateAnimation("exitAnimation", screen.exitAnimation);
+        for (std::size_t eventIndex = 0; eventIndex < screen.events.size();
+             ++eventIndex) {
+            if (!loaded.eventHandlers.contains(
+                    screen.events[eventIndex].handler)) {
+                addError(result, index,
+                    "events[" + std::to_string(eventIndex) + "].handler",
+                    "Screen event handler '"
+                        + screen.events[eventIndex].handler
+                        + "' is not authored by the referenced layout.");
+            }
+        }
     }
 
     result.dependencies.reserve(dependencies.size());

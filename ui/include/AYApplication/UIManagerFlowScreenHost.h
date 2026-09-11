@@ -42,6 +42,7 @@ public:
         std::uint64_t mountId,
         int layerOrder,
         std::uint32_t orderInLayer) noexcept override;
+    void setSignalEmitter(UIFlowScreenSignalEmitter emitter) override;
     void update(float deltaSeconds) override;
 
     [[nodiscard]] ayt::ui::Widget* screenRoot(
