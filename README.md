@@ -8,6 +8,7 @@ AYApplication 是引擎 Host 装配层，负责应用启动、子系统注册、
 | CMake 目标 | 用途 |
 |---|---|
 | `AYApplication` | 客户端/编辑器通用 Host、默认模块与场景生命周期 |
+| `AYApplicationGameFlow` | 无 UI 的应用流程文档、校验、标准化计划与运行时协调器 |
 | `AYOnlineContent` | 后端内容身份到可信本地场景的精确版本映射 |
 | `AYOnlineApplication` | 客户端 Online Flow 与运行时场景加载桥接 |
 | `AYDedicatedApplication` | Dedicated allocation 与真实 `Scene/World` 的权威端桥接 |
@@ -25,6 +26,7 @@ AYApplication 是引擎 Host 装配层，负责应用启动、子系统注册、
 #include <AYApplication/IApplication.h>
 #include <AYApplication/IEngineHost.h>
 #include <AYApplication/RegisterDefaultModules.h>
+#include <AYApplicationGameFlow.h>
 
 #include <AYOnlineApplication/OnlineApplication.h>
 #include <AYOnlineApplication/OnlineApplicationRuntimeModule.h>
@@ -34,7 +36,13 @@ AYApplication 是引擎 Host 装配层，负责应用启动、子系统注册、
 
 稳定客户端接口位于 `interface/AYApplication/`，在线集成接口位于
 `online/interface/AYOnlineApplication/`，实现辅助头位于
-`include/AYApplication/`。
+`include/AYApplication/`。GameFlow 接口位于 `gameflow/include/AYApplication/`，
+由独立 `AYApplicationGameFlow` target 导出；它不依赖 AYUI、Renderer 或 Device。
+
+GameFlow 阶段一已提供 schema v1、typed intent/action、层次状态、guard、确定性
+transition 选择、同步/异步 action、失败/取消/超时路径和 stale completion 隔离。
+UIFlow 与编辑器节点图均不在这个核心 target 中。完整边界与后续阶段见
+[`GAMEFLOW-IMPLEMENTATION-PLAN.md`](../../AYDocs/GAMEFLOW-IMPLEMENTATION-PLAN.md)。
 
 ## AYModule 接线
 
@@ -147,6 +155,8 @@ allocation、逐玩家准入、真实场景 tick、首名玩家离开后的席�
   feature 后，对应 Runtime 与 Entity integration target 均不会生成或进入最终链接。
 - `windows-headless-debug` 会生成 `AYApplication_HeadlessSmoke`；构建后运行它可防止
   Renderer/Audio/Physics/Script/Device/Animation/Network 重新泄漏进最小链接闭包。
+- `GameFlowCoreTest` 在 headless 与完整客户端组合中运行同一套流程语义测试；两个
+  preset 复用根仓 `out/build/vcpkg_installed`。
 - 最小 Application 仍使用 AYResource/AYScene，因此保留通用资产导入、存储与
   序列化依赖；本次边界不等同于“零第三方依赖”。
 - 下一步是接入游戏项目的真实 authority systems，并完成生产会话后端分配到

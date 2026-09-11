@@ -165,6 +165,50 @@ endif()
 # full-client implementation may use AYUI loaders, while headless builds
 # deliberately compile the same API without bringing UI into AYApplication.
 find_package(nlohmann_json CONFIG REQUIRED)
+
+# Application-level flow contract and runtime. This target is intentionally
+# independent of AYApplicationUI, rendering, and device code so servers and
+# validation tools execute exactly the same transition semantics as clients.
+add_library(AYApplicationGameFlow STATIC
+    gameflow/src/AYGameFlowActionRegistry.cpp
+    gameflow/src/AYGameFlowCoordinator.cpp
+    gameflow/src/AYGameFlowDocument.cpp
+    gameflow/include/AYApplication/GameFlowActionRegistry.h
+    gameflow/include/AYApplication/GameFlowCoordinator.h
+    gameflow/include/AYApplication/GameFlowDocument.h
+    AYApplicationGameFlow.h
+)
+target_include_directories(AYApplicationGameFlow PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/gameflow/include
+)
+target_link_libraries(AYApplicationGameFlow PRIVATE
+    nlohmann_json::nlohmann_json
+)
+target_compile_features(AYApplicationGameFlow PUBLIC cxx_std_23)
+target_compile_options(AYApplicationGameFlow PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+)
+
+if(BUILD_TESTING)
+    add_executable(GameFlowCoreTest
+        unittest/TestMain.cpp
+        unittest/Test_GameFlow.cpp
+    )
+    target_link_libraries(GameFlowCoreTest PRIVATE
+        AYApplicationGameFlow
+        AYTest
+    )
+    target_compile_definitions(GameFlowCoreTest PRIVATE
+        AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/unittest/assets")
+    target_compile_options(GameFlowCoreTest PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+    )
+    ay_add_test(GameFlowCoreTest LABELS "game-flow;headless;ayapplication")
+endif()
+
 add_library(AYProjectContentValidationCore STATIC
     src/AYProjectContentValidator.cpp
     interface/AYApplication/ProjectContentValidator.h)

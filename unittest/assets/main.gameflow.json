@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "main",
+  "initialState": "main_menu",
+  "intents": [
+    { "id": "start_game" },
+    {
+      "id": "world_ready",
+      "payload": [
+        { "id": "slot", "type": "integer", "required": false, "default": 0 }
+      ]
+    },
+    { "id": "return_to_menu" }
+  ],
+  "states": [
+    { "id": "main_menu" },
+    { "id": "loading" },
+    { "id": "playing" },
+    { "id": "load_error" }
+  ],
+  "transitions": [
+    {
+      "id": "begin_loading",
+      "from": "main_menu",
+      "intent": "start_game",
+      "to": "loading",
+      "actions": [
+        { "id": "test.record", "arguments": { "label": "begin" } }
+      ]
+    },
+    {
+      "id": "activate_world",
+      "from": "loading",
+      "intent": "world_ready",
+      "to": "playing",
+      "actions": [
+        { "id": "test.load" }
+      ],
+      "onFailure": "load_error",
+      "onCancel": "main_menu",
+      "timeoutSeconds": 5.0
+    },
+    {
+      "id": "leave_game",
+      "from": "playing",
+      "intent": "return_to_menu",
+      "to": "main_menu"
+    }
+  ]
+}

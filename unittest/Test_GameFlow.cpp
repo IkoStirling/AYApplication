@@ -1,0 +1,351 @@
+#include <AYApplication/GameFlowActionRegistry.h>
+#include <AYApplication/GameFlowCoordinator.h>
+#include <AYApplication/GameFlowDocument.h>
+#include <AYTest.h>
+
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <vector>
+
+namespace
+{
+
+using namespace ayt::app;
+
+std::string readFixture(std::string_view name)
+{
+    const std::filesystem::path path =
+        std::filesystem::path(AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT)
+        / std::string(name);
+    std::ifstream stream(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>()};
+}
+
+GameFlowActionRegistry makeRegistry(
+    std::vector<std::string>* records = nullptr,
+    GameFlowActionExecutionId* pending = nullptr,
+    bool* cancelled = nullptr)
+{
+    GameFlowActionRegistry registry;
+    std::string error;
+    CHECK(registry.registerAction(
+        {"test.record",
+            {{"label", GameFlowValueType::String, true, {}}},
+            false},
+        [records](const GameFlowActionInvocation& invocation) {
+            if (records != nullptr) {
+                const auto found = invocation.arguments->find("label");
+                records->push_back(std::get<std::string>(found->second.data));
+            }
+            return GameFlowActionResult::succeeded();
+        }, false, &error));
+    CHECK(error.empty());
+    CHECK(registry.registerAction(
+        {"test.load", {}, true},
+        [pending, cancelled](const GameFlowActionInvocation& invocation) {
+            if (pending != nullptr) *pending = invocation.executionId;
+            return GameFlowActionResult::pending([cancelled]() {
+                if (cancelled != nullptr) *cancelled = true;
+            });
+        }, false, &error));
+    CHECK(registry.registerGuard(
+        {"test.allow", {}},
+        [](const GameFlowGuardInvocation&) { return true; }, false, &error));
+    CHECK(registry.registerGuard(
+        {"test.deny", {}},
+        [](const GameFlowGuardInvocation&) { return false; }, false, &error));
+    return registry;
+}
+
+GameFlowDocument loadMainDocument()
+{
+    GameFlowDocument document;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    CHECK(GameFlowSerializer::deserialize(
+        readFixture("main.gameflow.json"), document, &diagnostics));
+    CHECK(diagnostics.empty());
+    return document;
+}
+
+GameFlowPlan buildMainPlan(const GameFlowActionRegistry& registry)
+{
+    GameFlowPlan plan;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    CHECK(buildGameFlowPlan(loadMainDocument(), registry, plan, &diagnostics));
+    CHECK(diagnostics.empty());
+    return plan;
+}
+
+} // namespace
+
+TEST_SUITE(GameFlowDocumentTests)
+
+TEST_CASE(schema_v1_fixture_round_trips_without_losing_contract_data)
+{
+    const auto document = loadMainDocument();
+    std::string encoded;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    CHECK(GameFlowSerializer::serialize(document, encoded, &diagnostics));
+    CHECK(diagnostics.empty());
+
+    GameFlowDocument decoded;
+    CHECK(GameFlowSerializer::deserialize(encoded, decoded, &diagnostics));
+    CHECK(decoded.id == document.id);
+    CHECK(decoded.initialState == document.initialState);
+    CHECK(decoded.intents.size() == document.intents.size());
+    CHECK(decoded.states.size() == document.states.size());
+    CHECK(decoded.transitions.size() == document.transitions.size());
+    CHECK(decoded.transitions[1].timeoutSeconds == 5.0);
+    CHECK(decoded.transitions[1].onFailureState == "load_error");
+    CHECK(decoded.intents[1].payload[0].defaultValue
+        == GameFlowValue(std::int64_t{0}));
+}
+
+TEST_CASE(invalid_fixture_reports_reference_duplicates_and_hierarchy_errors)
+{
+    GameFlowDocument document;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    CHECK(!GameFlowSerializer::deserialize(
+        readFixture("invalid.gameflow.json"), document, &diagnostics));
+    CHECK(diagnostics.size() >= 4u);
+}
+
+TEST_CASE(normalization_requires_registered_actions_and_valid_arguments)
+{
+    auto document = loadMainDocument();
+    GameFlowActionRegistry emptyRegistry;
+    GameFlowPlan plan;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    CHECK(!buildGameFlowPlan(document, emptyRegistry, plan, &diagnostics));
+
+    auto registry = makeRegistry();
+    document.transitions[0].actions[0].arguments["label"] = true;
+    CHECK(!buildGameFlowPlan(document, registry, plan, &diagnostics));
+}
+
+TEST_CASE(authoring_can_register_and_enumerate_types_without_runtime_handlers)
+{
+    GameFlowActionRegistry registry;
+    CHECK(registry.registerActionType(
+        {"world.replace",
+            {{"worldId", GameFlowValueType::String, true, {}}}, true}));
+    CHECK(registry.registerGuardType({"save.exists", {}}));
+    CHECK(registry.findActionHandler("world.replace") == nullptr);
+    CHECK(registry.findGuardHandler("save.exists") == nullptr);
+    CHECK(registry.actionTypes().size() == 1u);
+    CHECK(registry.actionTypes()[0].id == "world.replace");
+    CHECK(registry.guardTypes().size() == 1u);
+}
+
+TEST_CASE(normalized_transition_order_is_priority_then_document_order)
+{
+    auto registry = makeRegistry();
+    auto document = loadMainDocument();
+    auto preferred = document.transitions.front();
+    preferred.id = "preferred";
+    preferred.priority = 10;
+    preferred.guard.guard = "test.allow";
+    document.transitions.push_back(preferred);
+
+    GameFlowPlan plan;
+    CHECK(buildGameFlowPlan(document, registry, plan));
+    const auto& candidates = plan.transitionsByStateAndIntent.at(
+        std::string("main_menu\x1fstart_game"));
+    CHECK(candidates.size() == 2u);
+    CHECK(plan.document.transitions[
+        plan.transitions[candidates[0]].documentIndex].id == "preferred");
+}
+
+TEST_CASE(normalized_plan_materializes_registered_argument_defaults)
+{
+    std::string observed;
+    GameFlowActionRegistry registry;
+    CHECK(registry.registerAction(
+        {"test.default",
+            {{"mode", GameFlowValueType::String, true, "automatic"}}},
+        [&observed](const GameFlowActionInvocation& invocation) {
+            observed = std::get<std::string>(
+                invocation.arguments->at("mode").data);
+            return GameFlowActionResult::succeeded();
+        }));
+    GameFlowDocument document;
+    document.id = "defaults";
+    document.initialState = "before";
+    document.intents = {{"go", {}}};
+    document.states = {{"before"}, {"after"}};
+    GameFlowTransitionDefinition transition;
+    transition.id = "go_after";
+    transition.fromState = "before";
+    transition.triggerIntent = "go";
+    transition.toState = "after";
+    transition.actions.push_back({"test.default", {}});
+    document.transitions.push_back(std::move(transition));
+
+    GameFlowPlan plan;
+    CHECK(buildGameFlowPlan(document, registry, plan));
+    CHECK(plan.document.transitions[0].actions[0].arguments.contains("mode"));
+    GameFlowCoordinator coordinator;
+    CHECK(coordinator.setPlan(&plan, &registry));
+    CHECK(coordinator.request("go"));
+    coordinator.update();
+    CHECK(observed == "automatic");
+    CHECK(coordinator.currentState() == "after");
+}
+
+TEST_SUITE_END
+
+TEST_SUITE(GameFlowCoordinatorTests)
+
+TEST_CASE(denied_high_priority_transition_falls_back_deterministically)
+{
+    std::vector<std::string> records;
+    auto registry = makeRegistry(&records);
+    auto document = loadMainDocument();
+    auto denied = document.transitions.front();
+    denied.id = "denied_preferred";
+    denied.priority = 100;
+    denied.guard.guard = "test.deny";
+    document.transitions.push_back(std::move(denied));
+    GameFlowPlan plan;
+    CHECK(buildGameFlowPlan(document, registry, plan));
+
+    GameFlowCoordinator coordinator;
+    CHECK(coordinator.setPlan(&plan, &registry));
+    CHECK(coordinator.request("start_game"));
+    coordinator.update();
+    CHECK(coordinator.currentState() == "loading");
+    CHECK(records.size() == 1u);
+}
+
+TEST_CASE(headless_flow_moves_from_menu_through_loading_to_playing)
+{
+    std::vector<std::string> records;
+    GameFlowActionExecutionId pending = 0;
+    auto registry = makeRegistry(&records, &pending);
+    auto plan = buildMainPlan(registry);
+    GameFlowCoordinator coordinator;
+    CHECK(coordinator.setPlan(&plan, &registry));
+    CHECK(coordinator.currentState() == "main_menu");
+
+    CHECK(coordinator.request("start_game"));
+    coordinator.update();
+    CHECK(coordinator.currentState() == "loading");
+    CHECK(records.size() == 1u);
+    CHECK(records[0] == "begin");
+
+    CHECK(coordinator.request("world_ready"));
+    coordinator.update();
+    CHECK(coordinator.currentState() == "loading");
+    CHECK(coordinator.busy());
+    CHECK(pending != 0u);
+    CHECK(coordinator.completeAction(
+        pending, GameFlowActionResult::succeeded()));
+    CHECK(coordinator.currentState() == "playing");
+    CHECK(!coordinator.busy());
+}
+
+TEST_CASE(intent_payload_is_typed_and_receives_defaults)
+{
+    std::int64_t observedSlot = -1;
+    GameFlowActionRegistry registry;
+    CHECK(registry.registerAction(
+        {"test.record", {{"label", GameFlowValueType::String, true, {}}}},
+        [](const GameFlowActionInvocation&) {
+            return GameFlowActionResult::succeeded();
+        }));
+    CHECK(registry.registerAction(
+        {"test.load", {}, true},
+        [&observedSlot](const GameFlowActionInvocation& invocation) {
+            observedSlot = std::get<std::int64_t>(
+                invocation.intentPayload->at("slot").data);
+            return GameFlowActionResult::succeeded();
+        }));
+    auto plan = buildMainPlan(registry);
+    GameFlowCoordinator coordinator;
+    CHECK(coordinator.setPlan(&plan, &registry));
+    CHECK(coordinator.request("start_game"));
+    coordinator.update();
+    CHECK(coordinator.request("world_ready"));
+    coordinator.update();
+    CHECK(observedSlot == 0);
+    CHECK(coordinator.currentState() == "playing");
+
+    const auto rejected = coordinator.request(
+        "world_ready", {{"slot", GameFlowValue("wrong")}});
+    CHECK(rejected.state == GameFlowRequestState::InvalidPayload);
+}
+
+TEST_CASE(failure_cancel_timeout_and_stale_completion_take_declared_routes)
+{
+    GameFlowActionExecutionId pending = 0;
+    bool cancelled = false;
+    auto registry = makeRegistry(nullptr, &pending, &cancelled);
+    auto plan = buildMainPlan(registry);
+    GameFlowCoordinator coordinator;
+    CHECK(coordinator.setPlan(&plan, &registry));
+    CHECK(coordinator.request("start_game"));
+    coordinator.update();
+    CHECK(coordinator.request("world_ready"));
+    coordinator.update();
+    const auto stale = pending;
+    CHECK(coordinator.cancelActive("user left"));
+    CHECK(cancelled);
+    CHECK(coordinator.currentState() == "main_menu");
+
+    cancelled = false;
+    CHECK(coordinator.request("start_game"));
+    coordinator.update();
+    CHECK(coordinator.request("world_ready"));
+    coordinator.update();
+    const auto current = pending;
+    CHECK(current != stale);
+    std::string error;
+    CHECK(!coordinator.completeAction(
+        stale, GameFlowActionResult::succeeded(), &error));
+    CHECK(error.find("stale") != std::string::npos);
+    CHECK(coordinator.currentState() == "loading");
+    CHECK(coordinator.pendingAction() == current);
+    CHECK(coordinator.completeAction(
+        current, GameFlowActionResult::failed("load rejected")));
+    CHECK(coordinator.currentState() == "load_error");
+
+    CHECK(coordinator.setPlan(&plan, &registry));
+    cancelled = false;
+    CHECK(coordinator.request("start_game"));
+    coordinator.update();
+    CHECK(coordinator.request("world_ready"));
+    coordinator.update();
+    coordinator.update(5.0);
+    CHECK(cancelled);
+    CHECK(coordinator.currentState() == "load_error");
+}
+
+TEST_CASE(child_state_can_use_parent_transition)
+{
+    auto registry = makeRegistry();
+    GameFlowDocument document;
+    document.id = "hierarchy";
+    document.initialState = "game";
+    document.intents = {{"pause", {}}};
+    document.states = {
+        {"game", {}, "playing"},
+        {"playing", "game", {}},
+        {"paused", {}, {}},
+    };
+    document.transitions = {
+        {"pause_game", "game", "pause", "paused"},
+    };
+    GameFlowPlan plan;
+    CHECK(buildGameFlowPlan(document, registry, plan));
+    GameFlowCoordinator coordinator;
+    CHECK(coordinator.setPlan(&plan, &registry));
+    CHECK(coordinator.currentState() == "playing");
+    CHECK(coordinator.request("pause"));
+    coordinator.update();
+    CHECK(coordinator.currentState() == "paused");
+}
+
+TEST_SUITE_END

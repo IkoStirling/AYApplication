@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "invalid",
+  "initialState": "missing",
+  "intents": [
+    { "id": "go" },
+    { "id": "go" }
+  ],
+  "states": [
+    { "id": "one", "parent": "two" },
+    { "id": "two", "parent": "one" }
+  ],
+  "transitions": [
+    {
+      "id": "broken",
+      "from": "one",
+      "intent": "unknown",
+      "to": "missing"
+    }
+  ]
+}

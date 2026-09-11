@@ -1286,7 +1286,33 @@ document replacement 和 graph finish 都清除关联暂停状态，避免悬空
 
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
-## 16. 参考
+## 16. GameFlow 应用流程核心
+
+`AYApplicationGameFlow` 是独立静态目标，负责应用级流程的数据与执行语义。它不链接
+`AYApplicationUI`、AYUI、Renderer 或 Device，因此 Dedicated/headless 与完整客户端可以
+运行同一个流程计划。阶段一包含：
+
+- `GameFlowDocument` / `GameFlowSerializer`：schema v1 的 typed intent、平面存储的
+  层次 state、transition、guard 与 action call；
+- `validateGameFlow()` / `buildGameFlowPlan()`：检查重复 ID、引用、parent cycle、字段类型、
+  host action/guard 注册，并固化 default argument 与确定性 transition 顺序；
+- `GameFlowActionRegistry`：同时向运行时和未来编辑器暴露 action/guard 参数契约，handler
+  仍由应用 composition root 注入；
+- `GameFlowCoordinator`：跨 World 存活的状态协调器，按叶状态到父状态、priority 降序、
+  文档顺序选择 transition，并串行执行 action；
+- 异步 action 使用单调 execution ID 和 generation。取消、超时或新迁移后，旧 completion
+  不能再写回当前状态；失败与取消只进入文档明确声明的路由。
+
+协调器当前由宿主显式 `update()`，尚未注册 GameLoop module/service。阶段二先增加
+`world.replace(worldId)` 适配并通过 `RuntimeSceneLoadFinishedEvent` 完成 pending action；
+项目 `startupFlow`、UIFlow 桥接和 AYEditor 节点图依次后置。节点图只能编辑同一
+`GameFlowDocument` 并复用同一 validator/normalized plan，不建立第二套运行语义。
+
+实施状态、验证矩阵和后续切片见
+[`GAMEFLOW-IMPLEMENTATION-PLAN.md`](../../AYDocs/GAMEFLOW-IMPLEMENTATION-PLAN.md)，架构决策见
+[`ADR-0009`](../../AYDocs/adr/0009-gameflow-application-orchestration.md)。
+
+## 17. 参考
 
 - [O3DE Application](https://docs.o3de.org/)
 - [Unreal Engine Launch](https://docs.unrealengine.com/en-US/Programming/Development/Architecture/UnrealArchitecture/)
