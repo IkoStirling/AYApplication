@@ -70,6 +70,14 @@ public:
         bool allowSignals = true;
     };
 
+    struct Presentation
+    {
+        UIFlowScenePresentationHandle handle = 0;
+        std::string sourceId;
+        ayt::ui::UIFlowScope lifetime = ayt::ui::UIFlowScope::World;
+        std::string lifetimeKey;
+    };
+
     Impl(
         UIFlowRuntime& value,
         ayt::event::EventBus& bus,
@@ -109,15 +117,69 @@ public:
             + std::to_string(reinterpret_cast<std::uintptr_t>(&scene));
     }
 
-    const UIFlowWorldContextBinding* findBinding(
-        std::string_view key) const noexcept
+    std::vector<const UIFlowWorldContextBinding*> findBindings(
+        std::string_view key) const
     {
-        const auto found = std::find_if(
-            config.worldContexts.begin(), config.worldContexts.end(),
-            [key](const UIFlowWorldContextBinding& value) {
-                return value.worldKey == key;
-            });
-        return found == config.worldContexts.end() ? nullptr : &*found;
+        std::vector<const UIFlowWorldContextBinding*> result;
+        // Wildcard Contexts establish reusable per-World HUD/defaults. Exact
+        // bindings are activated afterwards so equal-priority exact Contexts
+        // win the normal newest-activation Slot tie-break.
+        for (const auto& binding : config.worldContexts) {
+            if (binding.worldKey == "*") result.push_back(&binding);
+        }
+        for (const auto& binding : config.worldContexts) {
+            if (binding.worldKey == key) result.push_back(&binding);
+        }
+        return result;
+    }
+
+    bool retireScenePresentations(
+        std::string_view previousWorldKey,
+        bool worldScopeWillEnd,
+        std::string& error)
+    {
+        for (auto it = presentations.begin(); it != presentations.end();) {
+            if (it->lifetime == ayt::ui::UIFlowScope::Application) {
+                ++it;
+                continue;
+            }
+            // World-scope replacement/end removes these handles atomically.
+            // Owner/Transient activations are bridge-owned and need an
+            // explicit pop before the Scene loses its owners.
+            if (it->lifetime != ayt::ui::UIFlowScope::World
+                || it->lifetimeKey != previousWorldKey
+                || !worldScopeWillEnd) {
+                std::string localError;
+                if (!runtime.deactivateContext(it->handle, &localError)) {
+                    error = "Cannot retire Scene presentation '"
+                        + it->sourceId + "': " + localError;
+                    return false;
+                }
+                ++statistics.presentationPops;
+            } else {
+                // The following World scope replacement/end owns the actual
+                // runtime deactivation, but this bridge-owned presentation is
+                // retired at the same boundary and must be counted here.
+                ++statistics.presentationPops;
+            }
+            it = presentations.erase(it);
+        }
+        return true;
+    }
+
+    void retireAllPresentations() noexcept
+    {
+        for (const Presentation& presentation : presentations) {
+            try {
+                std::string ignored;
+                if (runtime.deactivateContext(
+                        presentation.handle, &ignored)) {
+                    ++statistics.presentationPops;
+                }
+            } catch (...) {
+            }
+        }
+        presentations.clear();
     }
 
     UIFlowPayload scenePayload(const ayt::scene::Scene* scene) const
@@ -161,6 +223,12 @@ public:
         const std::string nextKey = next == nullptr
             ? std::string{}
             : resolveWorldKey(*next);
+        const bool worldScopeWillEnd = next == nullptr
+            || nextKey != previousKey;
+        if (!retireScenePresentations(
+                previousKey, worldScopeWillEnd, error)) {
+            return false;
+        }
         activePairs.clear();
         firedOnceVolumes.clear();
         activeScene = next;
@@ -195,9 +263,9 @@ public:
                 return false;
             }
             currentWorldKey = nextKey;
-            if (const UIFlowWorldContextBinding* binding =
-                    findBinding(nextKey);
-                binding != nullptr && !binding->contextId.empty()) {
+            for (const UIFlowWorldContextBinding* binding
+                 : findBindings(nextKey)) {
+                if (binding == nullptr || binding->contextId.empty()) continue;
                 UIFlowContextActivationOptions options;
                 options.lifetime = {
                     ayt::ui::UIFlowScope::World, currentWorldKey};
@@ -396,6 +464,8 @@ public:
     std::vector<ayt::event::ConnectionId> connections;
     std::unordered_map<std::uint64_t, ActivePair> activePairs;
     std::unordered_set<std::uint32_t> firedOnceVolumes;
+    std::vector<Presentation> presentations;
+    std::uint64_t nextTransientPresentation = 1;
     UIFlowSceneBridgeStats statistics;
     bool started = false;
     bool scopeSynchronized = true;
@@ -427,7 +497,7 @@ bool UIFlowSceneBridge::start(
         _impl->setError("UI Flow runtime must be started first.", error);
         return false;
     }
-    std::unordered_set<std::string> worldKeys;
+    std::unordered_set<std::string> bindings;
     const ayt::ui::UIFlowDocument* document = _impl->runtime.document();
     for (const UIFlowWorldContextBinding& binding
          : _impl->config.worldContexts) {
@@ -438,10 +508,13 @@ bool UIFlowSceneBridge::start(
                 error);
             return false;
         }
-        if (!worldKeys.insert(binding.worldKey).second) {
+        const std::string bindingKey = binding.worldKey + "\n"
+            + binding.contextId;
+        if (!bindings.insert(bindingKey).second) {
             _impl->setError(
                 "Duplicate World Context binding for '"
-                    + binding.worldKey + "'.",
+                    + binding.worldKey + "' and Context '"
+                    + binding.contextId + "'.",
                 error);
             return false;
         }
@@ -514,6 +587,25 @@ bool UIFlowSceneBridge::start(
                             "Scene end-play callback failed.");
                     }
                 }));
+        _impl->connections.push_back(
+            _impl->eventBus.subscribe<UIFlowSceneSignalRequestEvent>(
+                [impl = _impl.get()](const auto& request) {
+                    std::string callbackError;
+                    try {
+                        if (!impl->emitRequired(
+                                request.signalId,
+                                request.event,
+                                callbackError)) {
+                            impl->recordAsyncFailure(
+                                std::move(callbackError));
+                        }
+                    } catch (const std::exception& exception) {
+                        impl->recordAsyncFailure(exception.what());
+                    } catch (...) {
+                        impl->recordAsyncFailure(
+                            "Scene signal request callback failed.");
+                    }
+                }));
     } catch (const std::exception& exception) {
         stop();
         _impl->setError(
@@ -541,6 +633,7 @@ void UIFlowSceneBridge::stop() noexcept
             _impl->eventBus.unsubscribe(connection);
         }
         _impl->connections.clear();
+        _impl->retireAllPresentations();
         if (!_impl->currentWorldKey.empty()
             && _impl->runtime.scopeKey(ayt::ui::UIFlowScope::World)
                 == _impl->currentWorldKey) {
@@ -604,6 +697,153 @@ bool UIFlowSceneBridge::emitSceneSignal(
     }
     _impl->clearError(error);
     return true;
+}
+
+UIFlowScenePresentationHandle UIFlowSceneBridge::pushPresentation(
+    UIFlowScenePresentationRequest request,
+    std::string* error)
+{
+    if (!_impl->started) {
+        _impl->setError("UI Flow Scene bridge is not started.", error);
+        return 0;
+    }
+    if (request.contextId.empty() || request.sourceId.empty()) {
+        _impl->setError(
+            "Scene presentations require non-empty contextId and sourceId.",
+            error);
+        return 0;
+    }
+
+    switch (request.lifetime) {
+    case ayt::ui::UIFlowScope::Application:
+        if (!request.lifetimeKey.empty()
+            && request.lifetimeKey != "application") {
+            _impl->setError(
+                "Application Scene presentations must use lifetimeKey "
+                "'application'.",
+                error);
+            return 0;
+        }
+        request.lifetimeKey = "application";
+        break;
+    case ayt::ui::UIFlowScope::World:
+        if (_impl->currentWorldKey.empty()) {
+            _impl->setError(
+                "World Scene presentations require an active Scene.", error);
+            return 0;
+        }
+        if (!request.lifetimeKey.empty()
+            && request.lifetimeKey != _impl->currentWorldKey) {
+            _impl->setError(
+                "World Scene presentation lifetimeKey does not match the "
+                "active Scene.",
+                error);
+            return 0;
+        }
+        request.lifetimeKey = _impl->currentWorldKey;
+        break;
+    case ayt::ui::UIFlowScope::Owner:
+        if (request.lifetimeKey.empty()) {
+            request.lifetimeKey = request.sourceId;
+        }
+        break;
+    case ayt::ui::UIFlowScope::Transient:
+        if (request.lifetimeKey.empty()) {
+            request.lifetimeKey = "scene-presentation:"
+                + std::to_string(_impl->nextTransientPresentation++);
+        }
+        break;
+    }
+
+    UIFlowContextActivationOptions options;
+    options.lifetime = {request.lifetime, request.lifetimeKey};
+    std::string activationError;
+    const UIFlowScenePresentationHandle handle =
+        _impl->runtime.activateContext(
+            request.contextId, std::move(options), &activationError);
+    if (handle == 0) {
+        _impl->setError(std::move(activationError), error);
+        return 0;
+    }
+
+    try {
+        _impl->presentations.push_back(Impl::Presentation{
+            handle,
+            std::move(request.sourceId),
+            request.lifetime,
+            std::move(request.lifetimeKey)});
+    } catch (...) {
+        std::string ignored;
+        (void)_impl->runtime.deactivateContext(handle, &ignored);
+        _impl->setError(
+            "Cannot retain Scene presentation ownership.", error);
+        return 0;
+    }
+    ++_impl->statistics.presentationPushes;
+    _impl->clearError(error);
+    return handle;
+}
+
+bool UIFlowSceneBridge::popPresentation(
+    UIFlowScenePresentationHandle handle,
+    std::string* error)
+{
+    if (!_impl->started) {
+        _impl->setError("UI Flow Scene bridge is not started.", error);
+        return false;
+    }
+    const auto found = std::find_if(
+        _impl->presentations.begin(),
+        _impl->presentations.end(),
+        [handle](const Impl::Presentation& presentation) {
+            return presentation.handle == handle;
+        });
+    if (found == _impl->presentations.end()) {
+        _impl->setError("Unknown Scene presentation handle.", error);
+        return false;
+    }
+    std::string deactivationError;
+    if (!_impl->runtime.deactivateContext(handle, &deactivationError)) {
+        _impl->setError(std::move(deactivationError), error);
+        return false;
+    }
+    _impl->presentations.erase(found);
+    ++_impl->statistics.presentationPops;
+    _impl->clearError(error);
+    return true;
+}
+
+std::size_t UIFlowSceneBridge::releasePresentations(
+    std::string_view sourceId,
+    std::string* error)
+{
+    if (!_impl->started) {
+        _impl->setError("UI Flow Scene bridge is not started.", error);
+        return 0;
+    }
+    if (sourceId.empty()) {
+        _impl->setError(
+            "Scene presentation sourceId cannot be empty.", error);
+        return 0;
+    }
+    std::vector<UIFlowScenePresentationHandle> handles;
+    for (const Impl::Presentation& presentation : _impl->presentations) {
+        if (presentation.sourceId == sourceId) {
+            handles.push_back(presentation.handle);
+        }
+    }
+    std::size_t released = 0;
+    for (UIFlowScenePresentationHandle handle : handles) {
+        if (!popPresentation(handle, error)) return released;
+        ++released;
+    }
+    _impl->clearError(error);
+    return released;
+}
+
+std::size_t UIFlowSceneBridge::activePresentationCount() const noexcept
+{
+    return _impl->presentations.size();
 }
 
 ayt::scene::Scene* UIFlowSceneBridge::currentScene() const noexcept

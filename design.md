@@ -1267,6 +1267,17 @@ all-input Join，缺少任一已激活分支会报告未完成 Join。
 先使 continuation 失效，再至多一次通知每个异步宿主。因而 World/Flow 文档卸载不会留下可回写旧图的
 后台节点。Graph 完成仍通过原 completion handler 回到 `UIFlowRuntime`，保持阶段五的状态机边界。
 
+阶段十补齐 Scene 与 UI Flow 之间的稳定控制面。一个 World 可同时绑定多个 Context，`*` 绑定为
+每个 World 建立通用展示，精确 World 绑定随后激活并保留正常的优先级/activation-serial 仲裁。
+物理、脚本和任务系统既可以直接调用 `emitSceneSignal()`，也可以发布
+`UIFlowSceneSignalRequestEvent`，无需持有 Bridge 指针。
+
+剧情、交互区域和临时游戏模式可通过 `pushPresentation()` 投射一个 Context，并用稳定 handle 或
+`sourceId` 成组释放。请求只描述 Context、来源和 Application/World/Owner/Transient 生命周期，不接触
+Widget 或布局资产。World、Owner 与 Transient presentation 在 Scene 实例切换时自动退休，包括两个
+Scene 使用相同 World key 的情况；Application presentation 跨 Scene 保留，直到显式 pop 或 Bridge
+停止。由此 Scene 代码控制“何时出现哪组 UI 能力”，而 Flow 继续独占 Layer/Slot/Screen 的组合细节。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. 参考

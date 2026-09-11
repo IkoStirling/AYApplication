@@ -60,11 +60,15 @@ UIFlowDocument sceneBridgeDocument()
         UIFlowLayerDefinition{"application", 0},
         UIFlowLayerDefinition{"hud", 100},
         UIFlowLayerDefinition{"area", 200},
+        UIFlowLayerDefinition{"story", 300},
+        UIFlowLayerDefinition{"debug", 400},
     };
     document.slots = {
         UIFlowSlotDefinition{"application.main", "application", 1, true},
         UIFlowSlotDefinition{"hud.main", "hud", 1, true},
         UIFlowSlotDefinition{"area.main", "area", 1, true},
+        UIFlowSlotDefinition{"story.main", "story", 1, true},
+        UIFlowSlotDefinition{"debug.main", "debug", 1, true},
     };
     document.screens = {
         UIFlowScreenDefinition{
@@ -76,6 +80,15 @@ UIFlowDocument sceneBridgeDocument()
         UIFlowScreenDefinition{
             "area-prompt", "area.ui.json", "area", "area.main",
             UIFlowScope::World},
+        UIFlowScreenDefinition{
+            "story-panel", "story.ui.json", "story", "story.main",
+            UIFlowScope::World},
+        UIFlowScreenDefinition{
+            "owner-prompt", "owner.ui.json", "story", "story.main",
+            UIFlowScope::Owner},
+        UIFlowScreenDefinition{
+            "debug-overlay", "debug.ui.json", "debug", "debug.main",
+            UIFlowScope::Application},
     };
     document.contexts = {
         UIFlowContextDefinition{
@@ -87,6 +100,15 @@ UIFlowDocument sceneBridgeDocument()
         UIFlowContextDefinition{
             "InsideArea", 0,
             {{"area.main", UIFlowSlotOperation::Present, "area-prompt"}}},
+        UIFlowContextDefinition{
+            "Story", 0,
+            {{"story.main", UIFlowSlotOperation::Present, "story-panel"}}},
+        UIFlowContextDefinition{
+            "OwnerPrompt", 0,
+            {{"story.main", UIFlowSlotOperation::Present, "owner-prompt"}}},
+        UIFlowContextDefinition{
+            "PersistentDebug", 0,
+            {{"debug.main", UIFlowSlotOperation::Present, "debug-overlay"}}},
     };
     document.entries.push_back(UIFlowEntryDefinition{"boot", {"Boot"}, {}});
     document.signals = {
@@ -322,6 +344,134 @@ TEST_CASE(explicit_scene_signal_api_validates_against_flow_contract)
     CHECK(error.find("Unknown UI Flow Signal") != std::string::npos);
     CHECK(bridge.stats().emittedSignals == 1u);
     CHECK(bridge.stats().rejectedSignals == 1u);
+}
+
+TEST_CASE(scene_signal_requests_can_be_published_through_the_event_bus)
+{
+    SceneBridgeScreenHost screenHost;
+    UIFlowRuntime runtime(screenHost);
+    CHECK(runtime.load(sceneBridgeDocument()));
+    CHECK(runtime.start());
+
+    ayt::event::EventBus eventBus;
+    UIFlowSceneBridgeConfig config;
+    config.currentChangedSignal.clear();
+    UIFlowSceneBridge bridge(runtime, eventBus, std::move(config));
+    CHECK(bridge.start());
+
+    UIFlowSceneSignalRequestEvent request;
+    request.signalId = "zone.enter";
+    request.event.sourceId = "physics-trigger";
+    request.event.payload["reason"] = std::string("overlap");
+    eventBus.emit(request);
+    CHECK(runtime.activeState("area") == "inside");
+    CHECK(bridge.lastError().empty());
+
+    request.signalId = "missing.signal";
+    eventBus.emit(request);
+    CHECK(bridge.lastError().find("Unknown UI Flow Signal")
+        != std::string_view::npos);
+    CHECK(bridge.stats().emittedSignals == 1u);
+    CHECK(bridge.stats().rejectedSignals == 1u);
+}
+
+TEST_CASE(scene_presentations_support_source_release_and_scene_lifetimes)
+{
+    SceneBridgeScreenHost screenHost;
+    UIFlowRuntime runtime(screenHost);
+    CHECK(runtime.load(sceneBridgeDocument()));
+    CHECK(runtime.start());
+
+    ayt::event::EventBus eventBus;
+    ayt::scene::Scene town(ayt::scene::SceneMode::Play, "town");
+    ayt::scene::Scene arena(ayt::scene::SceneMode::Play, "arena");
+    UIFlowSceneBridgeConfig config;
+    config.currentChangedSignal.clear();
+    config.worldKeyResolver = [](const ayt::scene::Scene& scene) {
+        return scene.name();
+    };
+    UIFlowSceneBridge bridge(runtime, eventBus, std::move(config));
+    CHECK(bridge.start(&town));
+
+    const UIFlowScenePresentationHandle story = bridge.pushPresentation({
+        "Story", "story-zone", UIFlowScope::World, {}});
+    const UIFlowScenePresentationHandle owner = bridge.pushPresentation({
+        "OwnerPrompt", "cinematic-42", UIFlowScope::Owner, {}});
+    const UIFlowScenePresentationHandle debug = bridge.pushPresentation({
+        "PersistentDebug", "debug-service",
+        UIFlowScope::Application, {}});
+    CHECK(story != 0);
+    CHECK(owner != 0);
+    CHECK(debug != 0);
+    CHECK(bridge.activePresentationCount() == 3u);
+    CHECK(containsScreen(runtime, "owner-prompt"));
+    CHECK(containsScreen(runtime, "debug-overlay"));
+
+    CHECK(bridge.releasePresentations("cinematic-42") == 1u);
+    CHECK(bridge.activePresentationCount() == 2u);
+    CHECK_FALSE(containsScreen(runtime, "owner-prompt"));
+    CHECK(bridge.update(&arena));
+    CHECK(bridge.activePresentationCount() == 1u);
+    CHECK_FALSE(containsScreen(runtime, "story-panel"));
+    CHECK(containsScreen(runtime, "debug-overlay"));
+    CHECK(bridge.popPresentation(debug));
+    CHECK(bridge.activePresentationCount() == 0u);
+    CHECK_FALSE(containsScreen(runtime, "debug-overlay"));
+    CHECK(bridge.stats().presentationPushes == 3u);
+    CHECK(bridge.stats().presentationPops == 3u);
+}
+
+TEST_CASE(scene_presentations_retire_when_scene_instance_keeps_world_key)
+{
+    SceneBridgeScreenHost screenHost;
+    UIFlowRuntime runtime(screenHost);
+    CHECK(runtime.load(sceneBridgeDocument()));
+    CHECK(runtime.start());
+
+    ayt::event::EventBus eventBus;
+    ayt::scene::Scene first(ayt::scene::SceneMode::Play, "shared");
+    ayt::scene::Scene second(ayt::scene::SceneMode::Play, "shared");
+    UIFlowSceneBridgeConfig config;
+    config.currentChangedSignal.clear();
+    config.worldKeyResolver = [](const ayt::scene::Scene& scene) {
+        return scene.name();
+    };
+    UIFlowSceneBridge bridge(runtime, eventBus, std::move(config));
+    CHECK(bridge.start(&first));
+    CHECK(bridge.pushPresentation({
+        "Story", "first-instance", UIFlowScope::World, {}}) != 0);
+    CHECK(containsScreen(runtime, "story-panel"));
+
+    CHECK(bridge.update(&second));
+    CHECK(bridge.currentScene() == &second);
+    CHECK(bridge.activePresentationCount() == 0u);
+    CHECK_FALSE(containsScreen(runtime, "story-panel"));
+}
+
+TEST_CASE(world_context_bindings_support_defaults_and_multiple_contexts)
+{
+    SceneBridgeScreenHost screenHost;
+    UIFlowRuntime runtime(screenHost);
+    CHECK(runtime.load(sceneBridgeDocument()));
+    CHECK(runtime.start());
+
+    ayt::event::EventBus eventBus;
+    ayt::scene::Scene town(ayt::scene::SceneMode::Play, "town");
+    UIFlowSceneBridgeConfig config;
+    config.currentChangedSignal.clear();
+    config.worldKeyResolver = [](const ayt::scene::Scene& scene) {
+        return scene.name();
+    };
+    config.worldContexts = {
+        {"*", "Story"},
+        {"town", "Town"},
+        {"town", "InsideArea"},
+    };
+    UIFlowSceneBridge bridge(runtime, eventBus, std::move(config));
+    CHECK(bridge.start(&town));
+    CHECK(containsScreen(runtime, "story-panel"));
+    CHECK(containsScreen(runtime, "hud"));
+    CHECK(containsScreen(runtime, "area-prompt"));
 }
 
 TEST_CASE(scene_scope_sync_retries_after_a_transactional_mount_failure)

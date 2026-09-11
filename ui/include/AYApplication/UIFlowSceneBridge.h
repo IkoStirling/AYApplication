@@ -2,6 +2,7 @@
 
 #include <AYApplication/UIFlowRuntime.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -57,6 +58,30 @@ struct UIFlowSceneSignalEvent
     UIFlowPayload payload;
 };
 
+// EventBus-friendly entry point for Scene systems that should not retain a
+// direct bridge pointer. The bridge validates signalId against the active Flow
+// before dispatching it on the main thread.
+struct UIFlowSceneSignalRequestEvent
+{
+    std::string signalId;
+    UIFlowSceneSignalEvent event;
+};
+
+using UIFlowScenePresentationHandle = UIFlowContextHandle;
+
+// A Scene can temporarily project a Context into the global UI composition.
+// The Context decides which Layers/Slots/Screens it affects; Scene code stays
+// independent from Widget and asset details.
+struct UIFlowScenePresentationRequest
+{
+    std::string contextId;
+    std::string sourceId;
+    ayt::ui::UIFlowScope lifetime = ayt::ui::UIFlowScope::World;
+    // Empty selects the active World key, "application", sourceId for Owner,
+    // or a bridge-generated key for Transient lifetime.
+    std::string lifetimeKey;
+};
+
 struct UIFlowSceneBridgeStats
 {
     std::uint64_t sceneChanges = 0;
@@ -64,6 +89,8 @@ struct UIFlowSceneBridgeStats
     std::uint64_t volumeExits = 0;
     std::uint64_t emittedSignals = 0;
     std::uint64_t rejectedSignals = 0;
+    std::uint64_t presentationPushes = 0;
+    std::uint64_t presentationPops = 0;
 };
 
 // Main-thread Scene-to-Flow bridge. It owns no Scene, World, Entity, Widget,
@@ -99,6 +126,20 @@ public:
         std::string_view signalId,
         UIFlowSceneSignalEvent event = {},
         std::string* error = nullptr);
+
+    // Push/pop is the imperative escape hatch for cinematics, interactions,
+    // and scripted areas. Normal state-driven UI should still use Signals and
+    // Regions. Non-Application presentations are retired on Scene changes.
+    UIFlowScenePresentationHandle pushPresentation(
+        UIFlowScenePresentationRequest request,
+        std::string* error = nullptr);
+    bool popPresentation(
+        UIFlowScenePresentationHandle handle,
+        std::string* error = nullptr);
+    std::size_t releasePresentations(
+        std::string_view sourceId,
+        std::string* error = nullptr);
+    [[nodiscard]] std::size_t activePresentationCount() const noexcept;
 
     [[nodiscard]] ayt::scene::Scene* currentScene() const noexcept;
     [[nodiscard]] std::string_view currentWorldKey() const noexcept;
