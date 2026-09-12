@@ -26,11 +26,29 @@ struct GameFlowRuntimeConfig
 {
     std::string documentPath;
     ConfigureGameFlowRegistry configureRegistry;
+    bool enableWorldActions = true;
+    std::string startupIntent = "app.start";
     GameFlowDocumentResolver resolveDocument;
     GameFlowProgramBuildOptions programOptions;
     GameFlowPayload rootParameters;
-    bool enableWorldActions = true;
-    std::string startupIntent = "app.start";
+};
+
+enum class GameFlowReloadState : std::uint8_t
+{
+    Applied,
+    Deferred,
+    Rejected,
+};
+
+struct GameFlowReloadResult
+{
+    GameFlowReloadState state = GameFlowReloadState::Rejected;
+    std::string message;
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return state != GameFlowReloadState::Rejected;
+    }
 };
 
 // Immutable startup product built before the Application creates platform

@@ -5,6 +5,7 @@
 #include <AYTest.h>
 
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -74,6 +75,12 @@ std::filesystem::path subflowFixture()
 {
     return std::filesystem::path(AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT)
         / "runtime-subflow.gameflow.json";
+}
+
+std::filesystem::path schemaV2Fixture()
+{
+    return std::filesystem::path(AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT)
+        / "schema-v2.gameflow.json";
 }
 
 GameFlowDocument startupChildFlow()
@@ -222,6 +229,41 @@ TEST_CASE(preflight_resolves_and_runtime_executes_a_subflow_program)
     CHECK(runtime.coordinator().currentFlow() == "runtime-root");
     CHECK(runtime.currentState() == "ready");
     CHECK(runtime.coordinator().callDepth() == 0u);
+}
+
+TEST_CASE(preflight_contains_subflow_resolver_exceptions)
+{
+    GameFlowRuntimeConfig config;
+    config.documentPath = subflowFixture().string();
+    config.enableWorldActions = false;
+    config.resolveDocument = [](std::string_view, GameFlowDocument&,
+                                 std::string&) -> bool {
+        throw std::runtime_error("resolver unavailable");
+    };
+
+    std::string error;
+    auto prepared = prepareGameFlowRuntime(std::move(config), &error);
+    CHECK(prepared == nullptr);
+    CHECK(error.find("resolver threw") != std::string::npos);
+    CHECK(error.find("resolver unavailable") != std::string::npos);
+}
+
+TEST_CASE(preflight_rejects_invalid_root_parameters)
+{
+    GameFlowRuntimeConfig config;
+    config.documentPath = schemaV2Fixture().string();
+    config.enableWorldActions = false;
+    config.startupIntent.clear();
+
+    std::string error;
+    auto prepared = prepareGameFlowRuntime(config, &error);
+    CHECK(prepared == nullptr);
+    CHECK(error.find("profileId") != std::string::npos);
+
+    config.rootParameters = {{"profileId", "player-1"}};
+    prepared = prepareGameFlowRuntime(std::move(config), &error);
+    CHECK_NOT_NULL(prepared.get());
+    CHECK(error.empty());
 }
 
 TEST_SUITE_END

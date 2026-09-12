@@ -852,8 +852,9 @@ bool GameFlowCoordinator::cancelActive(std::string message)
 bool GameFlowCoordinator::cancelSubflowCall(std::string message)
 {
     if (_impl->frames.size() <= 1u) return false;
-    _impl->cancelFramesFrom(1u);
-    _impl->frames.resize(1u);
+    const std::size_t childIndex = _impl->frames.size() - 1u;
+    _impl->cancelFramesFrom(childIndex);
+    _impl->frames.resize(childIndex);
     if (!_impl->frames.back().active.has_value()
         || !_impl->frames.back().active->waitingForSubflow) return false;
     _impl->finishTop(GameFlowActionState::Cancelled, std::move(message));

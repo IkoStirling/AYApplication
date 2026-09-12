@@ -254,6 +254,12 @@ TEST_CASE(control_ids_are_reserved_and_single_plan_execution_rejects_them)
     CHECK_FALSE(registry.registerActionType(
         {std::string(kGameFlowActionEnter), {}, false}, false, &error));
     CHECK(error.find("reserved") != std::string::npos);
+    CHECK_FALSE(registry.registerAction(
+        {std::string(kGameFlowActionReturn), {}, false},
+        [](const GameFlowActionInvocation&) {
+            return GameFlowActionResult::succeeded();
+        }, false, &error));
+    CHECK(error.find("reserved") != std::string::npos);
     CHECK(registry.registerAction(
         {"test.observe-parent", {}, false},
         [](const GameFlowActionInvocation&) {
@@ -266,6 +272,54 @@ TEST_CASE(control_ids_are_reserved_and_single_plan_execution_rejects_them)
     GameFlowCoordinator coordinator;
     CHECK_FALSE(coordinator.setPlan(&plan, &registry, &error));
     CHECK(error.find("GameFlowProgram") != std::string::npos);
+}
+
+TEST_CASE(program_compiler_checks_max_depth_across_shared_subflows)
+{
+    GameFlowActionRegistry registry;
+    GameFlowDocument root;
+    root.id = "root";
+    root.initialState = "ready";
+    root.intents = {{"to_a", {}}, {"to_b", {}}};
+    root.states = {{"ready"}, {"done"}, {"failed"}};
+    root.transitions = {
+        {"first_resolve_a", "ready", "to_a", "done", {},
+            {{std::string(kGameFlowActionEnter), {{
+                std::string(kGameFlowSubflowIdArgument), "a"}}}},
+            "failed"},
+        {"then_resolve_b", "ready", "to_b", "done", {},
+            {{std::string(kGameFlowActionEnter), {{
+                std::string(kGameFlowSubflowIdArgument), "b"}}}},
+            "failed"},
+    };
+
+    GameFlowDocument a;
+    a.id = "a";
+    a.initialState = "idle";
+    a.states = {{"idle"}};
+
+    GameFlowDocument b;
+    b.id = "b";
+    b.initialState = "idle";
+    b.intents = {{"deeper", {}}};
+    b.states = {{"idle"}, {"done"}, {"failed"}};
+    b.transitions = {{"enter_a", "idle", "deeper", "done", {},
+        {{std::string(kGameFlowActionEnter), {{
+            std::string(kGameFlowSubflowIdArgument), "a"}}}}, "failed"}};
+
+    GameFlowProgram program;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    GameFlowProgramBuildOptions options;
+    options.maxCallDepth = 2u;
+    CHECK_FALSE(buildGameFlowProgram(root, registry,
+        [&a, &b](std::string_view id, GameFlowDocument& document,
+                 std::string&) {
+            if (id == "a") document = a;
+            else if (id == "b") document = b;
+            else return false;
+            return true;
+        }, program, &diagnostics, options));
+    CHECK_FALSE(diagnostics.empty());
 }
 
 TEST_CASE(parent_timeout_cancels_nested_pending_work_and_stales_completion)
@@ -294,6 +348,60 @@ TEST_CASE(parent_timeout_cancels_nested_pending_work_and_stales_completion)
     CHECK_FALSE(coordinator.completeAction(
         stale, GameFlowActionResult::succeeded(), &error));
     CHECK(error.find("stale") != std::string::npos);
+}
+
+TEST_CASE(cancel_subflow_call_unwinds_only_the_innermost_frame)
+{
+    SubflowHarness harness;
+    harness.child.states.push_back({"cancelled"});
+    harness.child.intents.push_back({"deeper", {}});
+    GameFlowTransitionDefinition enterGrandchild;
+    enterGrandchild.id = "enter_grandchild";
+    enterGrandchild.fromState = "waiting";
+    enterGrandchild.triggerIntent = "deeper";
+    enterGrandchild.toState = "returned";
+    enterGrandchild.actions = {control(std::string(kGameFlowActionEnter), {
+        {std::string(kGameFlowSubflowIdArgument), "grandchild"},
+    })};
+    enterGrandchild.onFailureState = "failed";
+    enterGrandchild.onCancelState = "cancelled";
+    harness.child.transitions.push_back(std::move(enterGrandchild));
+
+    GameFlowDocument grandchild;
+    grandchild.id = "grandchild";
+    grandchild.initialState = "idle";
+    grandchild.states = {{"idle"}};
+
+    CHECK(buildGameFlowProgram(harness.root, harness.registry,
+        [&harness, &grandchild](std::string_view id,
+                                GameFlowDocument& document,
+                                std::string&) {
+            if (id == harness.child.id) document = harness.child;
+            else if (id == grandchild.id) document = grandchild;
+            else return false;
+            return true;
+        }, harness.program));
+    GameFlowCoordinator coordinator;
+    CHECK(coordinator.setProgram(&harness.program, &harness.registry));
+    CHECK(coordinator.request("begin", {{"profileId", "player-10"}}));
+    coordinator.update(0.0);
+    CHECK(coordinator.currentFlow() == "match");
+    CHECK(coordinator.request("deeper"));
+    coordinator.update(0.0);
+    CHECK(coordinator.currentFlow() == "grandchild");
+    CHECK(coordinator.callDepth() == 2u);
+
+    CHECK(coordinator.cancelSubflowCall("leave grandchild"));
+    CHECK(coordinator.currentFlow() == "match");
+    CHECK(coordinator.currentState() == "cancelled");
+    CHECK(coordinator.callDepth() == 1u);
+    CHECK(coordinator.snapshot().frames[0].suspendedTransitionId
+        == "launch_match");
+
+    CHECK(coordinator.cancelSubflowCall("leave child"));
+    CHECK(coordinator.currentFlow() == "root");
+    CHECK(coordinator.currentState() == "cancelled");
+    CHECK(coordinator.callDepth() == 0u);
 }
 
 TEST_SUITE_END

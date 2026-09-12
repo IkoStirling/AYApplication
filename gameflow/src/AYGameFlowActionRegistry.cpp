@@ -258,6 +258,9 @@ bool GameFlowActionRegistry::registerAction(
     std::string validationError;
     if (definition.id.empty()) {
         validationError = "Action id must not be empty.";
+    } else if (isGameFlowControlAction(definition.id)) {
+        validationError = "Action id '" + definition.id
+            + "' is reserved by the GameFlow coordinator.";
     } else if (!handler) {
         validationError = "Action handler must be callable.";
     } else {

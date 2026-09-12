@@ -180,6 +180,16 @@ std::unique_ptr<GameFlowRuntimePreparation> prepareGameFlowRuntime(
             + prepared->_impl->startupIntent
             + "' is not declared by the document.");
     }
+    GameFlowCoordinator preflight;
+    std::string parameterError;
+    if (!preflight.setProgram(&prepared->_impl->program,
+            &prepared->_impl->registry,
+            prepared->_impl->rootParameters,
+            &parameterError)) {
+        return fail(parameterError.empty()
+            ? "GameFlow root parameters are invalid."
+            : std::move(parameterError));
+    }
 
     if (error != nullptr) error->clear();
     return prepared;

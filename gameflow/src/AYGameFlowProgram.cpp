@@ -1,6 +1,7 @@
 #include <AYApplication/GameFlowProgram.h>
 
 #include <algorithm>
+#include <exception>
 #include <set>
 #include <utility>
 
@@ -222,7 +223,18 @@ public:
                     }
                     GameFlowDocument resolved;
                     std::string error;
-                    if (!resolver(*subflowId, resolved, error)) {
+                    bool resolvedSuccessfully = false;
+                    try {
+                        resolvedSuccessfully = resolver(
+                            *subflowId, resolved, error);
+                    } catch (const std::exception& exception) {
+                        error = "GameFlow resolver threw for subflow '"
+                            + *subflowId + "': " + exception.what();
+                    } catch (...) {
+                        error = "GameFlow resolver threw for subflow '"
+                            + *subflowId + "'.";
+                    }
+                    if (!resolvedSuccessfully) {
                         appendDiagnostic(diagnostics,
                             path + ".arguments.subflowId",
                             error.empty()
@@ -278,6 +290,33 @@ private:
     std::set<std::string, std::less<>> visiting;
 };
 
+std::size_t longestCallPath(
+    const GameFlowProgram& program,
+    std::string_view flowId,
+    std::map<std::string, std::size_t, std::less<>>& cache)
+{
+    const auto cached = cache.find(flowId);
+    if (cached != cache.end()) return cached->second;
+    const GameFlowPlan* plan = program.findPlan(flowId);
+    if (plan == nullptr) return 0u;
+
+    std::size_t longest = 1u;
+    for (const auto& transition : plan->document.transitions) {
+        for (const auto& action : transition.actions) {
+            if (action.action != kGameFlowActionEnter) continue;
+            const auto id = action.arguments.find(
+                std::string(kGameFlowSubflowIdArgument));
+            if (id == action.arguments.end()) continue;
+            const auto* childId = std::get_if<std::string>(&id->second.data);
+            if (childId == nullptr) continue;
+            longest = std::max(longest,
+                1u + longestCallPath(program, *childId, cache));
+        }
+    }
+    cache.emplace(std::string(flowId), longest);
+    return longest;
+}
+
 } // namespace
 
 bool isGameFlowControlAction(std::string_view actionId) noexcept
@@ -312,6 +351,17 @@ bool buildGameFlowProgram(
     builder.program.rootFlowId = root.id;
     builder.program.maxCallDepth = options.maxCallDepth;
     if (!builder.add(root, 1u)) return false;
+    std::map<std::string, std::size_t, std::less<>> depthCache;
+    const std::size_t requiredDepth = longestCallPath(
+        builder.program, builder.program.rootFlowId, depthCache);
+    if (requiredDepth > options.maxCallDepth) {
+        appendDiagnostic(diagnostics, "$.flows",
+            "GameFlow subflow graph requires call depth "
+                + std::to_string(requiredDepth)
+                + ", exceeding maxCallDepth "
+                + std::to_string(options.maxCallDepth) + ".");
+        return false;
+    }
     program = std::move(builder.program);
     return true;
 }
