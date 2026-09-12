@@ -172,11 +172,13 @@ find_package(nlohmann_json CONFIG REQUIRED)
 add_library(AYApplicationGameFlow STATIC
     gameflow/src/AYGameFlowActionRegistry.cpp
     gameflow/src/AYGameFlowCoordinator.cpp
+    gameflow/src/AYGameFlowDiagnostics.cpp
     gameflow/src/AYGameFlowDocument.cpp
     gameflow/src/AYGameFlowMigration.cpp
     gameflow/src/AYGameFlowProgram.cpp
     gameflow/include/AYApplication/GameFlowActionRegistry.h
     gameflow/include/AYApplication/GameFlowCoordinator.h
+    gameflow/include/AYApplication/GameFlowDiagnostics.h
     gameflow/include/AYApplication/GameFlowDocument.h
     gameflow/include/AYApplication/GameFlowMigration.h
     gameflow/include/AYApplication/GameFlowProgram.h
@@ -257,6 +259,7 @@ if(BUILD_TESTING)
     add_executable(GameFlowCoreTest
         unittest/TestMain.cpp
         unittest/Test_GameFlow.cpp
+        unittest/Test_GameFlowDiagnostics.cpp
         unittest/Test_GameFlowSubflow.cpp
     )
     target_link_libraries(GameFlowCoreTest PRIVATE

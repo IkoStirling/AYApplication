@@ -184,6 +184,12 @@ TEST_CASE(subflow_parameters_and_results_resume_the_parent_transition)
     CHECK(nested.frames.size() == 2u);
     CHECK(nested.frames[0].suspendedTransitionId == "launch_match");
     CHECK(nested.queuedIntentCount == 1u);
+    const auto crashSnapshot = coordinator.diagnosticsSnapshot();
+    CHECK(crashSnapshot.runtime.frames.size() == 2u);
+    CHECK(crashSnapshot.runtime.frames[0].flowId == "root");
+    CHECK(crashSnapshot.runtime.frames[0].suspendedTransitionId
+        == "launch_match");
+    CHECK(crashSnapshot.runtime.frames[1].flowId == "match");
 
     CHECK(coordinator.request("finish"));
     coordinator.update();
@@ -195,6 +201,9 @@ TEST_CASE(subflow_parameters_and_results_resume_the_parent_transition)
     CHECK(coordinator.callDepth() == 0u);
     CHECK_FALSE(coordinator.busy());
     CHECK(coordinator.queuedIntentCount() == 0u);
+    CHECK(coordinator.metrics().subflowsEntered == 1u);
+    CHECK(coordinator.metrics().subflowsReturned == 1u);
+    CHECK(coordinator.metrics().maxCallDepth == 1u);
 
     bool sawChildTrace = false;
     for (const auto& entry : coordinator.trace()) {
@@ -344,6 +353,10 @@ TEST_CASE(parent_timeout_cancels_nested_pending_work_and_stales_completion)
     CHECK(coordinator.currentFlow() == "root");
     CHECK(coordinator.currentState() == "failed");
     CHECK_FALSE(coordinator.busy());
+    CHECK(coordinator.metrics().transitionsTimedOut == 1u);
+    CHECK(coordinator.metrics().transitionsFailed == 1u);
+    CHECK(coordinator.metrics().actionsCancelled == 1u);
+    CHECK(coordinator.metrics().subflowsCancelled == 1u);
     std::string error;
     CHECK_FALSE(coordinator.completeAction(
         stale, GameFlowActionResult::succeeded(), &error));

@@ -1,9 +1,11 @@
 #pragma once
 
 #include <AYApplication/GameFlowActionRegistry.h>
+#include <AYApplication/GameFlowDiagnostics.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <string>
@@ -181,6 +183,15 @@ public:
 
     [[nodiscard]] const std::vector<GameFlowTraceEntry>& trace() const noexcept;
     void clearTrace() noexcept;
+
+    void setEventHistoryCapacity(std::size_t capacity) noexcept;
+    [[nodiscard]] std::size_t eventHistoryCapacity() const noexcept;
+    [[nodiscard]] const std::deque<GameFlowEvent>& eventHistory() const noexcept;
+    void clearEventHistory() noexcept;
+    [[nodiscard]] const GameFlowMetrics& metrics() const noexcept;
+    void resetMetrics() noexcept;
+    void setEventObserver(GameFlowEventObserver observer) noexcept;
+    [[nodiscard]] GameFlowDiagnosticsSnapshot diagnosticsSnapshot() const;
 
 private:
     class Impl;
