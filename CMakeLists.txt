@@ -191,6 +191,27 @@ target_compile_options(AYApplicationGameFlow PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )
 
+# Optional World lifecycle binding. The core target above remains unaware of
+# Scene and Host types; applications opt into this adapter explicitly.
+add_library(AYApplicationGameFlowWorld STATIC
+    gameflow/world/src/AYGameFlowWorldActions.cpp
+    gameflow/world/include/AYApplication/GameFlowWorldActions.h
+    AYApplicationGameFlowWorld.h
+)
+target_include_directories(AYApplicationGameFlowWorld PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/gameflow/world/include
+)
+target_link_libraries(AYApplicationGameFlowWorld PUBLIC
+    AYApplicationGameFlow
+    AYApplication
+)
+target_compile_features(AYApplicationGameFlowWorld PUBLIC cxx_std_23)
+target_compile_options(AYApplicationGameFlowWorld PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+)
+
 if(BUILD_TESTING)
     add_executable(GameFlowCoreTest
         unittest/TestMain.cpp
@@ -207,6 +228,22 @@ if(BUILD_TESTING)
         $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
     )
     ay_add_test(GameFlowCoreTest LABELS "game-flow;headless;ayapplication")
+
+    add_executable(GameFlowWorldTest
+        unittest/TestMain.cpp
+        unittest/Test_GameFlowWorld.cpp
+    )
+    target_link_libraries(GameFlowWorldTest PRIVATE
+        AYApplicationGameFlowWorld
+        AYScene
+        AYTest
+    )
+    target_compile_options(GameFlowWorldTest PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+    )
+    ay_add_test(GameFlowWorldTest
+        LABELS "game-flow;world;headless;ayapplication")
 endif()
 
 add_library(AYProjectContentValidationCore STATIC

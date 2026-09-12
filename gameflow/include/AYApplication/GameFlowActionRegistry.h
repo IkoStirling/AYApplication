@@ -105,6 +105,8 @@ public:
         std::string_view id,
         GameFlowGuardHandler handler,
         std::string* error = nullptr);
+    bool clearActionHandler(std::string_view id) noexcept;
+    bool clearGuardHandler(std::string_view id) noexcept;
 
     // Convenience registration for runtime composition roots.
     bool registerAction(

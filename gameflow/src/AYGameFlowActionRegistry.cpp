@@ -223,6 +223,22 @@ bool GameFlowActionRegistry::setGuardHandler(
     return true;
 }
 
+bool GameFlowActionRegistry::clearActionHandler(std::string_view id) noexcept
+{
+    const auto found = _impl->actions.find(id);
+    if (found == _impl->actions.end()) return false;
+    found->second.handler = {};
+    return true;
+}
+
+bool GameFlowActionRegistry::clearGuardHandler(std::string_view id) noexcept
+{
+    const auto found = _impl->guards.find(id);
+    if (found == _impl->guards.end()) return false;
+    found->second.handler = {};
+    return true;
+}
+
 bool GameFlowActionRegistry::registerAction(
     GameFlowActionTypeDefinition definition,
     GameFlowActionHandler handler,
