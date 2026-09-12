@@ -1,4 +1,5 @@
 #include <AYApplication/GameFlowRuntime.h>
+#include <AYApplication/GameFlowWorldActions.h>
 #include <AYApplication/IEngineHost.h>
 #include <AYEventSystem/EventBus.h>
 #include <AYGameLoop.h>
@@ -81,6 +82,24 @@ std::filesystem::path schemaV2Fixture()
 {
     return std::filesystem::path(AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT)
         / "schema-v2.gameflow.json";
+}
+
+std::filesystem::path reloadFixture()
+{
+    return std::filesystem::path(AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT)
+        / "reload.gameflow.json";
+}
+
+std::filesystem::path pendingFixture()
+{
+    return std::filesystem::path(AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT)
+        / "reload-pending.gameflow.json";
+}
+
+std::filesystem::path reentrantFixture()
+{
+    return std::filesystem::path(AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT)
+        / "reload-reentrant.gameflow.json";
 }
 
 GameFlowDocument startupChildFlow()
@@ -264,6 +283,195 @@ TEST_CASE(preflight_rejects_invalid_root_parameters)
     prepared = prepareGameFlowRuntime(std::move(config), &error);
     CHECK_NOT_NULL(prepared.get());
     CHECK(error.empty());
+}
+
+TEST_CASE(reload_is_transactional_preserves_state_and_restores_bound_handlers)
+{
+    bool initiallyStarted = false;
+    auto prepared = prepareGameFlowRuntime(runtimeConfig(initiallyStarted));
+    CHECK_NOT_NULL(prepared.get());
+    if (prepared == nullptr) return;
+
+    RuntimeTestHost host;
+    GameFlowRuntime runtime(host, std::move(prepared));
+    CHECK(runtime.initialize());
+    runtime.update(0.0f);
+    CHECK(runtime.currentState() == "ready");
+
+    bool boundHandlerRan = false;
+    CHECK(runtime.bindActionHandler("test.mark_started",
+        [&boundHandlerRan](const GameFlowActionInvocation&) {
+            boundHandlerRan = true;
+            return GameFlowActionResult::succeeded();
+        }));
+
+    GameFlowRuntimeConfig invalid;
+    invalid.documentPath = "__missing_reload__.gameflow.json";
+    invalid.enableWorldActions = false;
+    const GameFlowReloadResult rejected = runtime.reload(std::move(invalid));
+    CHECK(rejected.state == GameFlowReloadState::Rejected);
+    CHECK(runtime.ready());
+    CHECK(runtime.currentState() == "ready");
+    CHECK(runtime.documentPath() == startupFixture().string());
+
+    bool candidateHandlerRan = false;
+    GameFlowRuntimeConfig drifted;
+    drifted.documentPath = reloadFixture().string();
+    drifted.enableWorldActions = false;
+    drifted.configureRegistry = [](GameFlowActionRegistry& registry,
+                                   std::string& error) {
+        return registry.registerAction(
+            {"test.mark_started", {}, true},
+            [](const GameFlowActionInvocation&) {
+                return GameFlowActionResult::succeeded();
+            }, false, &error);
+    };
+    const GameFlowReloadResult driftRejected = runtime.reload(
+        std::move(drifted));
+    CHECK(driftRejected.state == GameFlowReloadState::Rejected);
+    CHECK(driftRejected.message.find("contract") != std::string::npos);
+    CHECK(runtime.documentPath() == startupFixture().string());
+
+    auto candidate = runtimeConfig(candidateHandlerRan);
+    candidate.documentPath = reloadFixture().string();
+    const GameFlowReloadResult applied = runtime.reload(std::move(candidate));
+    CHECK(applied.state == GameFlowReloadState::Applied);
+    CHECK_FALSE(runtime.reloadPending());
+    CHECK(runtime.lastReloadError().empty());
+    CHECK(runtime.currentState() == "ready");
+    CHECK(runtime.documentPath() == reloadFixture().string());
+
+    CHECK(runtime.request("reload.only"));
+    runtime.update(0.0f);
+    CHECK(boundHandlerRan);
+    CHECK_FALSE(candidateHandlerRan);
+    CHECK(runtime.currentState() == "reloaded");
+}
+
+TEST_CASE(reload_waits_for_pending_transition_then_applies_at_safe_point)
+{
+    GameFlowActionExecutionId pending = 0;
+    GameFlowRuntimeConfig initial;
+    initial.documentPath = pendingFixture().string();
+    initial.enableWorldActions = false;
+    initial.configureRegistry = [&pending](GameFlowActionRegistry& registry,
+                                           std::string& error) {
+        return registry.registerAction({"test.pending", {}, true},
+            [&pending](const GameFlowActionInvocation& invocation) {
+                pending = invocation.executionId;
+                return GameFlowActionResult::pending();
+            }, false, &error);
+    };
+    auto prepared = prepareGameFlowRuntime(std::move(initial));
+    CHECK_NOT_NULL(prepared.get());
+    if (prepared == nullptr) return;
+
+    RuntimeTestHost host;
+    GameFlowRuntime runtime(host, std::move(prepared));
+    CHECK(runtime.initialize());
+    runtime.update(0.0f);
+    CHECK(pending != 0u);
+    CHECK(runtime.coordinator().busy());
+
+    bool candidateConfigured = false;
+    auto incompatible = runtimeConfig(candidateConfigured);
+    incompatible.documentPath = reloadFixture().string();
+    incompatible.enableWorldActions = true;
+    const GameFlowReloadResult mismatch = runtime.reload(
+        std::move(incompatible));
+    CHECK(mismatch.state == GameFlowReloadState::Rejected);
+    CHECK_FALSE(runtime.reloadPending());
+    CHECK(runtime.coordinator().busy());
+
+    auto candidate = runtimeConfig(candidateConfigured);
+    candidate.documentPath = reloadFixture().string();
+    const GameFlowReloadResult deferred = runtime.reload(std::move(candidate));
+    CHECK(deferred.state == GameFlowReloadState::Deferred);
+    CHECK(runtime.reloadPending());
+    CHECK(runtime.documentPath() == pendingFixture().string());
+
+    GameFlowRuntimeConfig invalidLatest;
+    invalidLatest.documentPath = "__invalid_latest__.gameflow.json";
+    invalidLatest.enableWorldActions = false;
+    CHECK(runtime.reload(std::move(invalidLatest)).state
+        == GameFlowReloadState::Rejected);
+    CHECK_FALSE(runtime.reloadPending());
+
+    candidate = runtimeConfig(candidateConfigured);
+    candidate.documentPath = reloadFixture().string();
+    CHECK(runtime.reload(std::move(candidate)).state
+        == GameFlowReloadState::Deferred);
+    CHECK(runtime.reloadPending());
+
+    CHECK(runtime.coordinator().completeAction(
+        pending, GameFlowActionResult::succeeded()));
+    CHECK(runtime.currentState() == "done");
+    runtime.update(0.0f);
+    CHECK_FALSE(runtime.reloadPending());
+    CHECK(runtime.documentPath() == reloadFixture().string());
+    CHECK(runtime.currentState() == "boot");
+}
+
+TEST_CASE(reload_requested_inside_guard_is_deferred_until_dispatch_returns)
+{
+    GameFlowRuntime* runtimePointer = nullptr;
+    GameFlowReloadState observed = GameFlowReloadState::Rejected;
+    bool guardRan = false;
+    bool candidateHandlerRan = false;
+    auto candidate = runtimeConfig(candidateHandlerRan);
+    candidate.documentPath = reloadFixture().string();
+
+    GameFlowRuntimeConfig initial;
+    initial.documentPath = reentrantFixture().string();
+    initial.enableWorldActions = false;
+    initial.configureRegistry = [&](GameFlowActionRegistry& registry,
+                                    std::string& error) {
+        return registry.registerGuard(
+            {"test.reload.guard", {}},
+            [&](const GameFlowGuardInvocation&) {
+                guardRan = true;
+                const GameFlowReloadResult result = runtimePointer->reload(
+                    std::move(candidate));
+                observed = result.state;
+                return true;
+            }, false, &error);
+    };
+
+    auto prepared = prepareGameFlowRuntime(std::move(initial));
+    CHECK_NOT_NULL(prepared.get());
+    if (prepared == nullptr) return;
+    RuntimeTestHost host;
+    GameFlowRuntime runtime(host, std::move(prepared));
+    runtimePointer = &runtime;
+    CHECK(runtime.initialize());
+    runtime.update(0.0f);
+
+    CHECK(guardRan);
+    CHECK(observed == GameFlowReloadState::Deferred);
+    CHECK_FALSE(runtime.reloadPending());
+    CHECK(runtime.documentPath() == reloadFixture().string());
+    CHECK(runtime.currentState() == "boot");
+}
+
+TEST_CASE(world_adapter_owned_action_cannot_be_rebound)
+{
+    bool started = false;
+    auto config = runtimeConfig(started);
+    config.enableWorldActions = true;
+    std::string error;
+    auto prepared = prepareGameFlowRuntime(std::move(config), &error);
+    CHECK_NOT_NULL(prepared.get());
+    CHECK(error.empty());
+    if (prepared == nullptr) return;
+
+    RuntimeTestHost host;
+    GameFlowRuntime runtime(host, std::move(prepared));
+    CHECK_FALSE(runtime.bindActionHandler(kGameFlowActionWorldReplace,
+        [](const GameFlowActionInvocation&) {
+            return GameFlowActionResult::succeeded();
+        }, &error));
+    CHECK(error.find("owned") != std::string::npos);
+    CHECK_FALSE(runtime.unbindActionHandler(kGameFlowActionWorldReplace));
 }
 
 TEST_SUITE_END

@@ -137,6 +137,14 @@ public:
         const GameFlowActionRegistry* registry,
         GameFlowPayload rootParameters = {},
         std::string* error = nullptr);
+    // Atomically replaces a complete program at a reload safe point. The
+    // current root state is preserved when the new root contains it;
+    // otherwise the new root starts from its declared initial state.
+    bool replaceProgram(
+        const GameFlowProgram* program,
+        const GameFlowActionRegistry* registry,
+        GameFlowPayload rootParameters = {},
+        std::string* error = nullptr);
     void reset() noexcept;
 
     GameFlowRequestResult request(

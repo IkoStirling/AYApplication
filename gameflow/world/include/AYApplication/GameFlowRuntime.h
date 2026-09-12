@@ -135,6 +135,13 @@ public:
         std::string* error = nullptr);
     bool unbindActionHandler(std::string_view actionId) noexcept;
 
+    // Fully validates a candidate before accepting it. A valid candidate is
+    // applied immediately at an idle root, or retained until the next reload
+    // safe point while the current program keeps running.
+    [[nodiscard]] GameFlowReloadResult reload(GameFlowRuntimeConfig config);
+    [[nodiscard]] bool reloadPending() const noexcept;
+    [[nodiscard]] std::string_view lastReloadError() const noexcept;
+
 private:
     class Impl;
     std::unique_ptr<Impl> _impl;

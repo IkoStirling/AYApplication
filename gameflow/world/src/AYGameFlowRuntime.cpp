@@ -7,6 +7,7 @@
 #include <exception>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <utility>
 
 namespace ayt::app
@@ -48,6 +49,28 @@ const ayt::game::SubSystemDescriptor& descriptor(bool worldActions)
         .writes = {"Application.GameFlowState"},
     };
     return worldActions ? withWorld : standalone;
+}
+
+bool compatibleActionDefinition(
+    const GameFlowActionTypeDefinition& left,
+    const GameFlowActionTypeDefinition& right)
+{
+    if (left.id != right.id
+        || left.asynchronous != right.asynchronous
+        || left.arguments.size() != right.arguments.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.arguments.size(); ++index) {
+        const auto& leftField = left.arguments[index];
+        const auto& rightField = right.arguments[index];
+        if (leftField.id != rightField.id
+            || leftField.type != rightField.type
+            || leftField.required != rightField.required
+            || leftField.defaultValue != rightField.defaultValue) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -198,6 +221,12 @@ std::unique_ptr<GameFlowRuntimePreparation> prepareGameFlowRuntime(
 class GameFlowRuntime::Impl
 {
 public:
+    struct BoundActionHandler
+    {
+        GameFlowActionTypeDefinition definition;
+        GameFlowActionHandler handler;
+    };
+
     Impl(IEngineHost& valueHost, GameFlowRuntimeConfig valueConfig)
         : host(valueHost),
           pendingConfig(std::move(valueConfig)),
@@ -218,12 +247,71 @@ public:
     IEngineHost& host;
     GameFlowRuntimeConfig pendingConfig;
     std::unique_ptr<GameFlowRuntimePreparation> preparation;
+    std::unique_ptr<GameFlowRuntimePreparation> pendingReload;
     GameFlowCoordinator coordinator;
     std::unique_ptr<GameFlowWorldActionAdapter> worldAdapter;
+    std::map<std::string, BoundActionHandler, std::less<>> boundHandlers;
     std::vector<GameFlowDiagnostic> failureDiagnostics;
     std::string lastError;
+    std::string lastReloadError;
     bool enableWorldActions = true;
     bool ready = false;
+
+    GameFlowReloadResult applyReload(
+        std::unique_ptr<GameFlowRuntimePreparation> candidate)
+    {
+        if (!candidate) {
+            return {GameFlowReloadState::Rejected,
+                "GameFlow reload candidate is unavailable."};
+        }
+        auto& next = *candidate->_impl;
+        if (next.enableWorldActions != enableWorldActions) {
+            return {GameFlowReloadState::Rejected,
+                "GameFlow reload cannot change World action assembly."};
+        }
+
+        std::string error;
+        for (const auto& [actionId, binding] : boundHandlers) {
+            const auto* definition = next.registry.findAction(actionId);
+            if (definition == nullptr
+                || !compatibleActionDefinition(
+                    *definition, binding.definition)) {
+                return {GameFlowReloadState::Rejected,
+                    "GameFlow reload changed the bound action contract for '"
+                        + actionId + "'."};
+            }
+            if (!next.registry.setActionHandler(
+                    actionId, binding.handler, &error)) {
+                return {GameFlowReloadState::Rejected,
+                    "GameFlow reload could not restore action handler '"
+                        + actionId + "': " + error};
+            }
+        }
+
+        std::unique_ptr<GameFlowWorldActionAdapter> nextWorldAdapter;
+        if (enableWorldActions) {
+            nextWorldAdapter = createGameFlowWorldActionAdapter(
+                host, next.registry, coordinator, &error);
+            if (!nextWorldAdapter) {
+                return {GameFlowReloadState::Rejected,
+                    error.empty()
+                        ? "GameFlow reload could not bind World actions."
+                        : std::move(error)};
+            }
+        }
+
+        if (!coordinator.replaceProgram(&next.program, &next.registry,
+                next.rootParameters, &error)) {
+            return {GameFlowReloadState::Rejected,
+                error.empty()
+                    ? "GameFlow reload could not replace the active program."
+                    : std::move(error)};
+        }
+
+        worldAdapter = std::move(nextWorldAdapter);
+        preparation = std::move(candidate);
+        return {GameFlowReloadState::Applied, {}};
+    }
 };
 
 GameFlowRuntime::GameFlowRuntime(
@@ -313,6 +401,11 @@ void GameFlowRuntime::update(float deltaTime)
     const double seconds = std::isfinite(deltaTime) && deltaTime > 0.0f
         ? static_cast<double>(deltaTime) : 0.0;
     _impl->coordinator.update(seconds);
+    if (_impl->pendingReload && _impl->coordinator.reloadSafePoint()) {
+        GameFlowReloadResult result = _impl->applyReload(
+            std::move(_impl->pendingReload));
+        if (!result) _impl->lastReloadError = std::move(result.message);
+    }
 }
 
 void GameFlowRuntime::fixedUpdate(float)
@@ -324,6 +417,7 @@ void GameFlowRuntime::shutdown()
     if (!_impl) return;
     _impl->coordinator.reset();
     _impl->worldAdapter.reset();
+    _impl->pendingReload.reset();
     _impl->ready = false;
 }
 
@@ -404,14 +498,83 @@ bool GameFlowRuntime::bindActionHandler(
         }
         return false;
     }
-    return _impl->preparation->_impl->registry.setActionHandler(
-        actionId, std::move(handler), error);
+    if (_impl->enableWorldActions
+        && actionId == kGameFlowActionWorldReplace) {
+        if (error != nullptr) {
+            *error = "world.replace is owned by the GameFlow World adapter.";
+        }
+        return false;
+    }
+    const auto* definition =
+        _impl->preparation->_impl->registry.findAction(actionId);
+    if (definition == nullptr) {
+        if (error != nullptr) {
+            *error = "GameFlow action type '" + std::string(actionId)
+                + "' is not registered.";
+        }
+        return false;
+    }
+    if (!_impl->preparation->_impl->registry.setActionHandler(
+            actionId, handler, error)) {
+        return false;
+    }
+    _impl->boundHandlers[std::string(actionId)] = {
+        *definition, std::move(handler)};
+    return true;
 }
 
 bool GameFlowRuntime::unbindActionHandler(std::string_view actionId) noexcept
 {
-    return _impl->preparation
-        && _impl->preparation->_impl->registry.clearActionHandler(actionId);
+    if (_impl->enableWorldActions
+        && actionId == kGameFlowActionWorldReplace) return false;
+    if (!_impl->preparation
+        || !_impl->preparation->_impl->registry.clearActionHandler(actionId)) {
+        return false;
+    }
+    _impl->boundHandlers.erase(std::string(actionId));
+    return true;
+}
+
+GameFlowReloadResult GameFlowRuntime::reload(GameFlowRuntimeConfig config)
+{
+    if (!_impl->ready) {
+        return {GameFlowReloadState::Rejected,
+            "GameFlow runtime is not ready."};
+    }
+    // A newer authoring request supersedes an older deferred candidate even
+    // when the newer document turns out to be invalid.
+    _impl->pendingReload.reset();
+    std::string error;
+    auto candidate = prepareGameFlowRuntime(std::move(config), &error);
+    if (!candidate) {
+        _impl->lastReloadError = error.empty()
+            ? "GameFlow reload preflight failed." : std::move(error);
+        return {GameFlowReloadState::Rejected, _impl->lastReloadError};
+    }
+    if (candidate->worldActionsEnabled() != _impl->enableWorldActions) {
+        _impl->lastReloadError =
+            "GameFlow reload cannot change World action assembly.";
+        return {GameFlowReloadState::Rejected, _impl->lastReloadError};
+    }
+    _impl->lastReloadError.clear();
+    if (!_impl->coordinator.reloadSafePoint()) {
+        _impl->pendingReload = std::move(candidate);
+        return {GameFlowReloadState::Deferred,
+            "GameFlow reload is waiting for an idle root safe point."};
+    }
+    GameFlowReloadResult result = _impl->applyReload(std::move(candidate));
+    if (!result) _impl->lastReloadError = result.message;
+    return result;
+}
+
+bool GameFlowRuntime::reloadPending() const noexcept
+{
+    return _impl->pendingReload != nullptr;
+}
+
+std::string_view GameFlowRuntime::lastReloadError() const noexcept
+{
+    return _impl->lastReloadError;
 }
 
 GameFlowRuntime* gameFlowRuntime(IEngineHost& host) noexcept

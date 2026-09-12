@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "id": "pending-runtime",
+  "initialState": "boot",
+  "entryParameters": [],
+  "result": [],
+  "extensions": {},
+  "intents": [
+    { "id": "app.start" }
+  ],
+  "states": [
+    { "id": "boot" },
+    { "id": "done" },
+    { "id": "failed" }
+  ],
+  "transitions": [
+    {
+      "id": "pending_startup",
+      "from": "boot",
+      "intent": "app.start",
+      "to": "done",
+      "actions": [
+        { "id": "test.pending" }
+      ],
+      "onFailure": "failed"
+    }
+  ]
+}

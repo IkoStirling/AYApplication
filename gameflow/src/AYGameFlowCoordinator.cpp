@@ -202,6 +202,13 @@ bool buildGameFlowPlan(
 class GameFlowCoordinator::Impl
 {
 public:
+    struct DispatchScope
+    {
+        explicit DispatchScope(std::size_t& value) : depth(value) { ++depth; }
+        ~DispatchScope() { --depth; }
+        std::size_t& depth;
+    };
+
     struct IntentRequest
     {
         std::size_t intentIndex = 0;
@@ -242,6 +249,7 @@ public:
     GameFlowActionExecutionId nextActionExecutionId = 1;
     std::uint64_t nextFrameSerial = 1;
     std::uint64_t nextTraceSerial = 1;
+    std::size_t dispatchDepth = 0;
     std::vector<GameFlowTraceEntry> traces;
 
     std::size_t resolveInitial(const GameFlowPlan& plan,
@@ -739,6 +747,66 @@ bool GameFlowCoordinator::setProgram(
     return true;
 }
 
+bool GameFlowCoordinator::replaceProgram(
+    const GameFlowProgram* program,
+    const GameFlowActionRegistry* registry,
+    GameFlowPayload rootParameters,
+    std::string* error)
+{
+    if (!reloadSafePoint()) {
+        if (error != nullptr) *error = "GameFlow is not at a reload safe point.";
+        return false;
+    }
+    if (program == nullptr || registry == nullptr) {
+        if (error != nullptr) {
+            *error = "GameFlow program and registry are required.";
+        }
+        return false;
+    }
+    const GameFlowPlan* root = program->findPlan(program->rootFlowId);
+    if (root == nullptr) {
+        if (error != nullptr) *error = "GameFlow program has no root plan.";
+        return false;
+    }
+    std::string localError;
+    if (!normalizePayload(root->document.entryParameters,
+            "Root flow entry", rootParameters, nullptr, {}, localError)) {
+        if (error != nullptr) *error = std::move(localError);
+        return false;
+    }
+
+    const std::string previousFlow = std::string(currentFlow());
+    const std::string previousState = std::string(currentState());
+    Impl::Frame candidate = _impl->makeFrame(root, std::move(rootParameters));
+    if (candidate.currentStateIndex == kNoState) {
+        if (error != nullptr) {
+            *error = "GameFlow root plan has no valid initial state.";
+        }
+        return false;
+    }
+
+    bool preserved = false;
+    if (root->document.id == previousFlow) {
+        const auto state = root->stateIndices.find(previousState);
+        if (state != root->stateIndices.end()) {
+            candidate.currentStateIndex = _impl->resolveInitial(
+                *root, state->second);
+            preserved = candidate.currentStateIndex != kNoState;
+        }
+    }
+
+    _impl->program = program;
+    _impl->legacyPlan = nullptr;
+    _impl->registry = registry;
+    _impl->frames.clear();
+    _impl->frames.push_back(std::move(candidate));
+    _impl->appendTrace(0, 0, {}, preserved
+        ? "program reloaded; root state preserved"
+        : "program reloaded; root state reset");
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 void GameFlowCoordinator::reset() noexcept
 {
     _impl->cancelFramesFrom(0u);
@@ -775,6 +843,7 @@ GameFlowRequestResult GameFlowCoordinator::request(
 void GameFlowCoordinator::update(double deltaSeconds)
 {
     if (_impl->frames.empty()) return;
+    Impl::DispatchScope dispatch(_impl->dispatchDepth);
     if (!std::isfinite(deltaSeconds) || deltaSeconds < 0.0) deltaSeconds = 0.0;
 
     std::size_t expired = kNoState;
@@ -924,7 +993,8 @@ bool GameFlowCoordinator::busy() const noexcept
 
 bool GameFlowCoordinator::reloadSafePoint() const noexcept
 {
-    return _impl->frames.size() == 1u
+    return _impl->dispatchDepth == 0u
+        && _impl->frames.size() == 1u
         && !_impl->frames.front().active.has_value()
         && _impl->frames.front().requests.empty();
 }

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "id": "runtime-startup",
+  "initialState": "boot",
+  "entryParameters": [],
+  "result": [],
+  "extensions": {},
+  "intents": [
+    { "id": "app.start" },
+    { "id": "reload.only" }
+  ],
+  "states": [
+    { "id": "boot" },
+    { "id": "ready" },
+    { "id": "reloaded" },
+    { "id": "reload_error" }
+  ],
+  "transitions": [
+    {
+      "id": "boot_after_reload",
+      "from": "boot",
+      "intent": "app.start",
+      "to": "ready"
+    },
+    {
+      "id": "exercise_preserved_handler",
+      "from": "ready",
+      "intent": "reload.only",
+      "to": "reloaded",
+      "actions": [
+        { "id": "test.mark_started" }
+      ],
+      "onFailure": "reload_error"
+    }
+  ]
+}
