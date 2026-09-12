@@ -70,6 +70,29 @@ std::filesystem::path startupFixture()
         / "startup.gameflow.json";
 }
 
+std::filesystem::path subflowFixture()
+{
+    return std::filesystem::path(AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT)
+        / "runtime-subflow.gameflow.json";
+}
+
+GameFlowDocument startupChildFlow()
+{
+    GameFlowDocument child;
+    child.id = "runtime-child";
+    child.initialState = "waiting";
+    child.intents = {{"finish", {}}};
+    child.states = {{"waiting"}, {"returned"}};
+    GameFlowTransitionDefinition transition;
+    transition.id = "return_to_root";
+    transition.fromState = "waiting";
+    transition.triggerIntent = "finish";
+    transition.toState = "returned";
+    transition.actions = {{std::string(kGameFlowActionReturn), {}}};
+    child.transitions.push_back(std::move(transition));
+    return child;
+}
+
 GameFlowRuntimeConfig runtimeConfig(bool& started)
 {
     GameFlowRuntimeConfig config;
@@ -162,6 +185,43 @@ TEST_CASE(preflight_reports_a_missing_document_before_runtime_creation)
 
     CHECK(prepared == nullptr);
     CHECK(error.find("Cannot open GameFlow document") != std::string::npos);
+}
+
+TEST_CASE(preflight_resolves_and_runtime_executes_a_subflow_program)
+{
+    GameFlowRuntimeConfig config;
+    config.documentPath = subflowFixture().string();
+    config.enableWorldActions = false;
+    config.resolveDocument = [](std::string_view flowId,
+                                 GameFlowDocument& document,
+                                 std::string& error) {
+        if (flowId != "runtime-child") {
+            error = "Unknown test subflow: " + std::string(flowId);
+            return false;
+        }
+        document = startupChildFlow();
+        return true;
+    };
+
+    std::string error;
+    auto prepared = prepareGameFlowRuntime(std::move(config), &error);
+    CHECK_NOT_NULL(prepared.get());
+    CHECK(error.empty());
+    if (prepared == nullptr) return;
+
+    RuntimeTestHost host;
+    GameFlowRuntime runtime(host, std::move(prepared));
+    CHECK(runtime.initialize());
+    runtime.update(0.0f);
+    CHECK(runtime.coordinator().currentFlow() == "runtime-child");
+    CHECK(runtime.currentState() == "waiting");
+    CHECK(runtime.coordinator().callDepth() == 1u);
+
+    CHECK(runtime.request("finish"));
+    runtime.update(0.0f);
+    CHECK(runtime.coordinator().currentFlow() == "runtime-root");
+    CHECK(runtime.currentState() == "ready");
+    CHECK(runtime.coordinator().callDepth() == 0u);
 }
 
 TEST_SUITE_END

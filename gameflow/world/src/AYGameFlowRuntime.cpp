@@ -59,7 +59,8 @@ public:
     std::string startupIntent;
     bool enableWorldActions = true;
     GameFlowActionRegistry registry;
-    GameFlowPlan plan;
+    GameFlowProgram program;
+    GameFlowPayload rootParameters;
     std::vector<GameFlowDiagnostic> diagnostics;
 };
 
@@ -91,7 +92,7 @@ bool GameFlowRuntimePreparation::worldActionsEnabled() const noexcept
 
 const GameFlowDocument& GameFlowRuntimePreparation::document() const noexcept
 {
-    return _impl->plan.document;
+    return _impl->program.findPlan(_impl->program.rootFlowId)->document;
 }
 
 const std::vector<GameFlowDiagnostic>&
@@ -108,6 +109,7 @@ std::unique_ptr<GameFlowRuntimePreparation> prepareGameFlowRuntime(
     prepared->_impl->documentPath = std::move(config.documentPath);
     prepared->_impl->startupIntent = std::move(config.startupIntent);
     prepared->_impl->enableWorldActions = config.enableWorldActions;
+    prepared->_impl->rootParameters = std::move(config.rootParameters);
 
     auto fail = [&](std::string message)
         -> std::unique_ptr<GameFlowRuntimePreparation> {
@@ -158,17 +160,21 @@ std::unique_ptr<GameFlowRuntimePreparation> prepareGameFlowRuntime(
             prepared->_impl->diagnostics,
             "GameFlow document could not be parsed."));
     }
-    if (!buildGameFlowPlan(
+    if (!buildGameFlowProgram(
             document,
             prepared->_impl->registry,
-            prepared->_impl->plan,
-            &prepared->_impl->diagnostics)) {
+            std::move(config.resolveDocument),
+            prepared->_impl->program,
+            &prepared->_impl->diagnostics,
+            config.programOptions)) {
         return fail(diagnosticMessage(
             prepared->_impl->diagnostics,
-            "GameFlow document could not be normalized."));
+            "GameFlow program could not be normalized."));
     }
+    const GameFlowPlan* root = prepared->_impl->program.findPlan(
+        prepared->_impl->program.rootFlowId);
     if (!prepared->_impl->startupIntent.empty()
-        && prepared->_impl->plan.document.findIntent(
+        && root->document.findIntent(
             prepared->_impl->startupIntent) == nullptr) {
         return fail("Startup GameFlow intent '"
             + prepared->_impl->startupIntent
@@ -266,9 +272,10 @@ bool GameFlowRuntime::initialize()
             &_impl->lastError);
         if (!_impl->worldAdapter) return false;
     }
-    if (!_impl->coordinator.setPlan(
-            &prepared.plan,
+    if (!_impl->coordinator.setProgram(
+            &prepared.program,
             &prepared.registry,
+            prepared.rootParameters,
             &_impl->lastError)) {
         _impl->worldAdapter.reset();
         return false;

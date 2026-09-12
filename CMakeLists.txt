@@ -174,10 +174,12 @@ add_library(AYApplicationGameFlow STATIC
     gameflow/src/AYGameFlowCoordinator.cpp
     gameflow/src/AYGameFlowDocument.cpp
     gameflow/src/AYGameFlowMigration.cpp
+    gameflow/src/AYGameFlowProgram.cpp
     gameflow/include/AYApplication/GameFlowActionRegistry.h
     gameflow/include/AYApplication/GameFlowCoordinator.h
     gameflow/include/AYApplication/GameFlowDocument.h
     gameflow/include/AYApplication/GameFlowMigration.h
+    gameflow/include/AYApplication/GameFlowProgram.h
     AYApplicationGameFlow.h
 )
 target_include_directories(AYApplicationGameFlow PUBLIC
@@ -255,6 +257,7 @@ if(BUILD_TESTING)
     add_executable(GameFlowCoreTest
         unittest/TestMain.cpp
         unittest/Test_GameFlow.cpp
+        unittest/Test_GameFlowSubflow.cpp
     )
     target_link_libraries(GameFlowCoreTest PRIVATE
         AYApplicationGameFlow

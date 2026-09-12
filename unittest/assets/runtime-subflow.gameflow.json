@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "id": "runtime-root",
+  "initialState": "boot",
+  "entryParameters": [],
+  "result": [],
+  "extensions": {},
+  "intents": [
+    { "id": "app.start" }
+  ],
+  "states": [
+    { "id": "boot" },
+    { "id": "ready" },
+    { "id": "startup_error" }
+  ],
+  "transitions": [
+    {
+      "id": "run_startup_child",
+      "from": "boot",
+      "intent": "app.start",
+      "to": "ready",
+      "actions": [
+        {
+          "id": "flow.enter",
+          "arguments": { "subflowId": "runtime-child" }
+        }
+      ],
+      "onFailure": "startup_error"
+    }
+  ]
+}

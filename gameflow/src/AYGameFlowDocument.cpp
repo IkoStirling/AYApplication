@@ -1,6 +1,7 @@
 #include <AYApplication/GameFlowActionRegistry.h>
 #include <AYApplication/GameFlowDocument.h>
 #include <AYApplication/GameFlowMigration.h>
+#include <AYApplication/GameFlowProgram.h>
 
 #include <nlohmann/json.hpp>
 
@@ -408,6 +409,19 @@ bool validateGameFlow(const GameFlowDocument& document,
                 + std::to_string(actionIndex) + "]";
             if (action.action.empty()) {
                 error(actionPath + ".id", "Action id must not be empty.");
+            } else if (action.action == kGameFlowActionEnter) {
+                const auto subflow = action.arguments.find(
+                    std::string(kGameFlowSubflowIdArgument));
+                const auto* subflowId = subflow == action.arguments.end()
+                    ? nullptr
+                    : std::get_if<std::string>(&subflow->second.data);
+                if (subflowId == nullptr || subflowId->empty()) {
+                    error(actionPath + ".arguments.subflowId",
+                        "flow.enter requires a non-empty string subflowId.");
+                }
+            } else if (action.action == kGameFlowActionReturn) {
+                // Result fields are validated against this document by the
+                // complete-program compiler, which also knows the caller.
             } else if (registry != nullptr) {
                 if (const auto* definition = registry->findAction(action.action)) {
                     if (!validateArguments(action.arguments,

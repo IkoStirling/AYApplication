@@ -1,4 +1,5 @@
 #include <AYApplication/GameFlowActionRegistry.h>
+#include <AYApplication/GameFlowProgram.h>
 
 #include <cmath>
 #include <map>
@@ -119,6 +120,9 @@ bool GameFlowActionRegistry::registerActionType(
     std::string validationError;
     if (definition.id.empty()) {
         validationError = "Action id must not be empty.";
+    } else if (isGameFlowControlAction(definition.id)) {
+        validationError = "Action id '" + definition.id
+            + "' is reserved by the GameFlow coordinator.";
     } else {
         validateFields(definition.arguments, validationError);
     }
@@ -184,6 +188,12 @@ bool GameFlowActionRegistry::setActionHandler(
     GameFlowActionHandler handler,
     std::string* error)
 {
+    if (isGameFlowControlAction(id)) {
+        if (error != nullptr) {
+            *error = "GameFlow control actions cannot have host handlers.";
+        }
+        return false;
+    }
     const auto found = _impl->actions.find(id);
     if (found == _impl->actions.end()) {
         if (error != nullptr) {

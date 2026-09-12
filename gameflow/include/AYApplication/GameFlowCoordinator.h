@@ -13,6 +13,8 @@
 namespace ayt::app
 {
 
+struct GameFlowProgram;
+
 struct GameFlowNormalizedTransition
 {
     std::size_t documentIndex = 0;
@@ -69,6 +71,8 @@ struct GameFlowTraceEntry
     std::string state;
     std::string transition;
     std::string detail;
+    std::string flowId;
+    std::size_t callDepth = 0;
 };
 
 inline constexpr std::size_t kNoGameFlowActionIndex =
@@ -81,6 +85,15 @@ enum class GameFlowCoordinatorStatus : std::uint8_t
     Queued,
     Running,
     WaitingForAction,
+    WaitingForSubflow,
+};
+
+struct GameFlowStackFrameSnapshot
+{
+    std::uint64_t instanceSerial = 0;
+    std::string flowId;
+    std::string stateId;
+    std::string suspendedTransitionId;
 };
 
 // An owning, point-in-time view intended for tooling and diagnostics. The
@@ -97,6 +110,10 @@ struct GameFlowCoordinatorSnapshot
     GameFlowActionExecutionId executionId = 0;
     std::size_t queuedIntentCount = 0;
     bool busy = false;
+    std::string currentFlowId;
+    std::string qualifiedStateId;
+    std::size_t callDepth = 0;
+    std::vector<GameFlowStackFrameSnapshot> frames;
 };
 
 class GameFlowCoordinator
@@ -115,6 +132,11 @@ public:
         const GameFlowPlan* plan,
         const GameFlowActionRegistry* registry,
         std::string* error = nullptr);
+    bool setProgram(
+        const GameFlowProgram* program,
+        const GameFlowActionRegistry* registry,
+        GameFlowPayload rootParameters = {},
+        std::string* error = nullptr);
     void reset() noexcept;
 
     GameFlowRequestResult request(
@@ -130,13 +152,23 @@ public:
         GameFlowActionResult result,
         std::string* error = nullptr);
     bool cancelActive(std::string message = {});
+    bool cancelSubflowCall(std::string message = {});
 
     [[nodiscard]] std::string_view currentState() const noexcept;
+    [[nodiscard]] std::string_view currentFlow() const noexcept;
+    [[nodiscard]] std::string qualifiedState() const;
+    [[nodiscard]] std::size_t callDepth() const noexcept;
     [[nodiscard]] std::string_view activeTransition() const noexcept;
     [[nodiscard]] GameFlowGeneration activeGeneration() const noexcept;
     [[nodiscard]] GameFlowActionExecutionId pendingAction() const noexcept;
     [[nodiscard]] std::size_t queuedIntentCount() const noexcept;
     [[nodiscard]] bool busy() const noexcept;
+    // Hot reload may swap plans only when no transition, queued intent, or
+    // nested subflow can still reference the old program.
+    [[nodiscard]] bool reloadSafePoint() const noexcept;
+    bool restoreState(std::string_view flowId,
+                      std::string_view stateId,
+                      std::string* error = nullptr);
     [[nodiscard]] GameFlowCoordinatorSnapshot snapshot() const;
 
     [[nodiscard]] const std::vector<GameFlowTraceEntry>& trace() const noexcept;

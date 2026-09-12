@@ -37,6 +37,12 @@ struct GameFlowActionInvocation
     std::string_view intent;
     const GameFlowPayload* intentPayload = nullptr;
     const GameFlowPayload* arguments = nullptr;
+    // Parameters supplied when the current subflow was entered. Empty for a
+    // root flow. The result pointers describe the most recently returned
+    // child while the parent transition resumes after flow.enter.
+    const GameFlowPayload* flowParameters = nullptr;
+    const GameFlowPayload* lastSubflowResult = nullptr;
+    std::string_view returnedFlowId;
 };
 
 enum class GameFlowActionState : std::uint8_t
@@ -69,6 +75,9 @@ struct GameFlowGuardInvocation
     std::string_view intent;
     const GameFlowPayload* intentPayload = nullptr;
     const GameFlowPayload* arguments = nullptr;
+    const GameFlowPayload* flowParameters = nullptr;
+    const GameFlowPayload* lastSubflowResult = nullptr;
+    std::string_view returnedFlowId;
 };
 
 using GameFlowActionHandler =

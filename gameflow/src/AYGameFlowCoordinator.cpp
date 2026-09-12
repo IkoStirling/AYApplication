@@ -1,4 +1,5 @@
 #include <AYApplication/GameFlowCoordinator.h>
+#include <AYApplication/GameFlowProgram.h>
 
 #include <algorithm>
 #include <cmath>
@@ -41,36 +42,68 @@ bool valueMatches(const GameFlowValue& value, GameFlowValueType type)
     return false;
 }
 
-bool normalizePayload(const GameFlowIntentDefinition& intent,
+bool normalizePayload(const std::vector<GameFlowFieldDefinition>& fields,
+                      std::string_view contractName,
                       GameFlowPayload& payload,
+                      const GameFlowPayload* fallback,
+                      std::string_view reservedField,
                       std::string& error)
 {
-    std::map<std::string, const GameFlowFieldDefinition*, std::less<>> fields;
-    for (const auto& field : intent.payload) fields.emplace(field.id, &field);
+    std::map<std::string, const GameFlowFieldDefinition*, std::less<>> schema;
+    for (const auto& field : fields) schema.emplace(field.id, &field);
     for (const auto& [id, value] : payload) {
-        const auto found = fields.find(id);
-        if (found == fields.end()) {
-            error = "Intent '" + intent.id + "' received unknown field '"
+        if (!reservedField.empty() && id == reservedField) continue;
+        const auto found = schema.find(id);
+        if (found == schema.end()) {
+            error = std::string(contractName) + " received unknown field '"
                 + id + "'.";
             return false;
         }
         if (!valueMatches(value, found->second->type)) {
-            error = "Intent field '" + id + "' has the wrong type.";
+            error = std::string(contractName) + " field '" + id
+                + "' has the wrong type.";
             return false;
         }
     }
-    for (const auto& field : intent.payload) {
+    if (!reservedField.empty()) payload.erase(std::string(reservedField));
+    for (const auto& field : fields) {
         if (payload.contains(field.id)) continue;
+        if (fallback != nullptr) {
+            const auto source = fallback->find(field.id);
+            if (source != fallback->end()
+                && valueMatches(source->second, field.type)) {
+                payload.emplace(field.id, source->second);
+                continue;
+            }
+        }
         if (!std::holds_alternative<std::monostate>(field.defaultValue.data)) {
             payload.emplace(field.id, field.defaultValue);
         } else if (field.required) {
-            error = "Intent '" + intent.id + "' requires field '"
+            error = std::string(contractName) + " requires field '"
                 + field.id + "'.";
             return false;
         }
     }
     error.clear();
     return true;
+}
+
+bool normalizeIntentPayload(const GameFlowIntentDefinition& intent,
+                            GameFlowPayload& payload,
+                            std::string& error)
+{
+    return normalizePayload(intent.payload,
+        "Intent '" + intent.id + "'", payload, nullptr, {}, error);
+}
+
+bool hasControlActions(const GameFlowPlan& plan) noexcept
+{
+    for (const auto& transition : plan.document.transitions) {
+        for (const auto& action : transition.actions) {
+            if (isGameFlowControlAction(action.action)) return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -98,6 +131,7 @@ bool buildGameFlowPlan(
             }
         }
         for (auto& action : transition.actions) {
+            if (isGameFlowControlAction(action.action)) continue;
             const auto* definition = registry.findAction(action.action);
             for (const auto& field : definition->arguments) {
                 if (!action.arguments.contains(field.id)
@@ -185,56 +219,106 @@ public:
         GameFlowActionExecutionId activeActionExecution = 0;
         GameFlowActionExecutionId pendingAction = 0;
         GameFlowActionCancellationHandler onCancel;
+        bool waitingForSubflow = false;
     };
 
-    const GameFlowPlan* plan = nullptr;
+    struct Frame
+    {
+        const GameFlowPlan* plan = nullptr;
+        std::uint64_t instanceSerial = 0;
+        std::size_t currentStateIndex = kNoState;
+        GameFlowPayload parameters;
+        std::deque<IntentRequest> requests;
+        std::optional<ActiveTransition> active;
+        GameFlowPayload lastSubflowResult;
+        std::string returnedFlowId;
+    };
+
+    const GameFlowProgram* program = nullptr;
+    const GameFlowPlan* legacyPlan = nullptr;
     const GameFlowActionRegistry* registry = nullptr;
-    std::size_t currentStateIndex = kNoState;
-    std::deque<IntentRequest> requests;
-    std::optional<ActiveTransition> active;
+    std::vector<Frame> frames;
     GameFlowGeneration nextGeneration = 1;
     GameFlowActionExecutionId nextActionExecutionId = 1;
+    std::uint64_t nextFrameSerial = 1;
     std::uint64_t nextTraceSerial = 1;
     std::vector<GameFlowTraceEntry> traces;
 
-    std::size_t resolveInitial(std::size_t stateIndex) const
+    std::size_t resolveInitial(const GameFlowPlan& plan,
+                               std::size_t stateIndex) const
     {
         while (stateIndex != kNoState) {
-            const auto& state = plan->document.states[stateIndex];
+            const auto& state = plan.document.states[stateIndex];
             if (state.initialChild.empty()) break;
-            const auto child = plan->stateIndices.find(state.initialChild);
-            if (child == plan->stateIndices.end()) return kNoState;
+            const auto child = plan.stateIndices.find(state.initialChild);
+            if (child == plan.stateIndices.end()) return kNoState;
             stateIndex = child->second;
         }
         return stateIndex;
     }
 
+    Frame makeFrame(const GameFlowPlan* plan, GameFlowPayload parameters)
+    {
+        Frame frame;
+        frame.plan = plan;
+        frame.instanceSerial = nextFrameSerial++;
+        frame.parameters = std::move(parameters);
+        const auto initial = plan->stateIndices.find(plan->document.initialState);
+        frame.currentStateIndex = initial == plan->stateIndices.end()
+            ? kNoState : resolveInitial(*plan, initial->second);
+        return frame;
+    }
+
     void appendTrace(GameFlowGeneration generation,
                      GameFlowActionExecutionId actionExecutionId,
                      std::string transition,
-                     std::string detail)
+                     std::string detail,
+                     std::size_t frameIndex = kNoState)
     {
-        std::string state;
-        if (plan != nullptr && currentStateIndex != kNoState) {
-            state = plan->document.states[currentStateIndex].id;
+        if (frameIndex == kNoState && !frames.empty()) {
+            frameIndex = frames.size() - 1u;
         }
-        traces.push_back({nextTraceSerial++, generation, actionExecutionId,
-            std::move(state), std::move(transition), std::move(detail)});
+        std::string state;
+        std::string flow;
+        std::size_t depth = 0;
+        if (frameIndex < frames.size()) {
+            const Frame& frame = frames[frameIndex];
+            flow = frame.plan->document.id;
+            depth = frameIndex;
+            if (frame.currentStateIndex != kNoState) {
+                state = frame.plan->document.states[
+                    frame.currentStateIndex].id;
+            }
+        }
+        GameFlowTraceEntry entry;
+        entry.serial = nextTraceSerial++;
+        entry.generation = generation;
+        entry.actionExecutionId = actionExecutionId;
+        entry.state = std::move(state);
+        entry.transition = std::move(transition);
+        entry.detail = std::move(detail);
+        entry.flowId = std::move(flow);
+        entry.callDepth = depth;
+        traces.push_back(std::move(entry));
         if (traces.size() > 512u) traces.erase(traces.begin());
     }
 
-    std::optional<std::size_t> selectTransition(const IntentRequest& request)
+    std::optional<std::size_t> selectTransition(
+        Frame& frame, const IntentRequest& request)
     {
-        std::size_t stateIndex = currentStateIndex;
-        const auto& intent = plan->document.intents[request.intentIndex];
+        std::size_t stateIndex = frame.currentStateIndex;
+        const auto& intent = frame.plan->document.intents[request.intentIndex];
         while (stateIndex != kNoState) {
-            const auto& state = plan->document.states[stateIndex];
-            const auto candidates = plan->transitionsByStateAndIntent.find(
-                transitionKey(state.id, intent.id));
-            if (candidates != plan->transitionsByStateAndIntent.end()) {
+            const auto& state = frame.plan->document.states[stateIndex];
+            const auto candidates =
+                frame.plan->transitionsByStateAndIntent.find(
+                    transitionKey(state.id, intent.id));
+            if (candidates !=
+                frame.plan->transitionsByStateAndIntent.end()) {
                 for (const std::size_t transitionIndex : candidates->second) {
-                    const auto& normalized = plan->transitions[transitionIndex];
-                    const auto& transition = plan->document.transitions[
+                    const auto& normalized =
+                        frame.plan->transitions[transitionIndex];
+                    const auto& transition = frame.plan->document.transitions[
                         normalized.documentIndex];
                     if (transition.guard.guard.empty()) return transitionIndex;
                     const auto* handler = registry->findGuardHandler(
@@ -246,11 +330,14 @@ public:
                     }
                     try {
                         const GameFlowGuardInvocation invocation{
-                            plan->document.id,
+                            frame.plan->document.id,
                             transition.id,
                             intent.id,
                             &request.payload,
                             &transition.guard.arguments,
+                            &frame.parameters,
+                            &frame.lastSubflowResult,
+                            frame.returnedFlowId,
                         };
                         if ((*handler)(invocation)) return transitionIndex;
                     } catch (const std::exception& exception) {
@@ -263,20 +350,23 @@ public:
                 }
             }
             if (state.parent.empty()) break;
-            const auto parent = plan->stateIndices.find(state.parent);
-            if (parent == plan->stateIndices.end()) break;
+            const auto parent = frame.plan->stateIndices.find(state.parent);
+            if (parent == frame.plan->stateIndices.end()) break;
             stateIndex = parent->second;
         }
         return std::nullopt;
     }
 
-    void finish(GameFlowActionState result, std::string message)
+    void finishTop(GameFlowActionState result, std::string message)
     {
-        const ActiveTransition snapshot = *active;
-        const auto& normalized = plan->transitions[snapshot.transitionIndex];
-        const auto& transition = plan->document.transitions[
+        if (frames.empty() || !frames.back().active.has_value()) return;
+        Frame& frame = frames.back();
+        const ActiveTransition snapshot = *frame.active;
+        const auto& normalized =
+            frame.plan->transitions[snapshot.transitionIndex];
+        const auto& transition = frame.plan->document.transitions[
             normalized.documentIndex];
-        std::size_t routedState = currentStateIndex;
+        std::size_t routedState = frame.currentStateIndex;
         std::string detail;
         switch (result) {
         case GameFlowActionState::Succeeded:
@@ -298,68 +388,196 @@ public:
         case GameFlowActionState::Pending:
             return;
         }
-        active.reset();
-        currentStateIndex = resolveInitial(routedState);
+        frame.active.reset();
+        frame.currentStateIndex = resolveInitial(*frame.plan, routedState);
         if (!message.empty()) detail += ": " + message;
         appendTrace(snapshot.generation, snapshot.pendingAction,
             transition.id, std::move(detail));
     }
 
-    void acceptActionResult(GameFlowActionResult result)
+    void invokeCancellation(Frame& frame) noexcept
     {
-        if (!active.has_value()) return;
-        if (result.state == GameFlowActionState::Succeeded) {
-            active->pendingAction = 0;
-            active->activeActionIndex = kNoGameFlowActionIndex;
-            active->activeActionExecution = 0;
-            active->onCancel = {};
-            driveActions();
-            return;
+        if (!frame.active.has_value() || !frame.active->onCancel) return;
+        auto callback = std::move(frame.active->onCancel);
+        try {
+            callback();
+        } catch (...) {
+            // Cancellation is best-effort and never changes the selected route.
         }
-        if (result.state == GameFlowActionState::Pending) return;
-        active->pendingAction = 0;
-        active->onCancel = {};
-        finish(result.state, std::move(result.message));
+    }
+
+    void cancelFramesFrom(std::size_t first) noexcept
+    {
+        for (std::size_t index = frames.size(); index > first; --index) {
+            invokeCancellation(frames[index - 1u]);
+        }
+    }
+
+    bool enterSubflow(const GameFlowActionCall& action)
+    {
+        Frame& parent = frames.back();
+        ActiveTransition& active = *parent.active;
+        const auto& transition = parent.plan->document.transitions[
+            parent.plan->transitions[active.transitionIndex].documentIndex];
+        const auto idValue = action.arguments.find(
+            std::string(kGameFlowSubflowIdArgument));
+        const auto* subflowId = idValue == action.arguments.end()
+            ? nullptr : std::get_if<std::string>(&idValue->second.data);
+        if (program == nullptr || subflowId == nullptr || subflowId->empty()) {
+            finishTop(GameFlowActionState::Failed,
+                "flow.enter has no resolvable subflowId");
+            return false;
+        }
+        const GameFlowPlan* child = program->findPlan(*subflowId);
+        if (child == nullptr) {
+            finishTop(GameFlowActionState::Failed,
+                "subflow '" + *subflowId + "' is unavailable");
+            return false;
+        }
+        if (frames.size() >= program->maxCallDepth) {
+            finishTop(GameFlowActionState::Failed,
+                "subflow call depth limit reached");
+            return false;
+        }
+        if (std::any_of(frames.begin(), frames.end(),
+                [subflowId](const Frame& frame) {
+                    return frame.plan->document.id == *subflowId;
+                })) {
+            finishTop(GameFlowActionState::Failed,
+                "recursive subflow call rejected for '" + *subflowId + "'");
+            return false;
+        }
+
+        GameFlowPayload parameters = action.arguments;
+        std::string error;
+        if (!normalizePayload(child->document.entryParameters,
+                "Subflow '" + *subflowId + "' entry", parameters,
+                &active.request.payload, kGameFlowSubflowIdArgument, error)) {
+            finishTop(GameFlowActionState::Failed, std::move(error));
+            return false;
+        }
+
+        parent.lastSubflowResult.clear();
+        parent.returnedFlowId.clear();
+        const GameFlowActionExecutionId executionId =
+            nextActionExecutionId++;
+        active.activeActionExecution = executionId;
+        active.waitingForSubflow = true;
+        appendTrace(active.generation, executionId, transition.id,
+            "entering subflow '" + *subflowId + "'");
+        frames.push_back(makeFrame(child, std::move(parameters)));
+        appendTrace(0, 0, {}, "subflow entered");
+        return true;
+    }
+
+    bool returnFromSubflow(const GameFlowActionCall& action)
+    {
+        if (frames.size() <= 1u) {
+            finishTop(GameFlowActionState::Failed,
+                "flow.return cannot execute in the root flow");
+            return false;
+        }
+        Frame& child = frames.back();
+        ActiveTransition& childActive = *child.active;
+        const auto& childTransition = child.plan->document.transitions[
+            child.plan->transitions[
+                childActive.transitionIndex].documentIndex];
+        GameFlowPayload result = action.arguments;
+        std::string error;
+        if (!normalizePayload(child.plan->document.result,
+                "Subflow '" + child.plan->document.id + "' result", result,
+                &childActive.request.payload, {}, error)) {
+            finishTop(GameFlowActionState::Failed, std::move(error));
+            return false;
+        }
+
+        const GameFlowActionExecutionId executionId =
+            nextActionExecutionId++;
+        appendTrace(childActive.generation, executionId,
+            childTransition.id, "returning from subflow");
+        const std::string returnedFlow = child.plan->document.id;
+        child.active.reset();
+        child.requests.clear();
+        frames.pop_back();
+
+        Frame& parent = frames.back();
+        if (!parent.active.has_value()
+            || !parent.active->waitingForSubflow) {
+            appendTrace(0, 0, {},
+                "subflow return found no suspended caller");
+            return false;
+        }
+        parent.lastSubflowResult = std::move(result);
+        parent.returnedFlowId = returnedFlow;
+        parent.active->waitingForSubflow = false;
+        parent.active->activeActionIndex = kNoGameFlowActionIndex;
+        parent.active->activeActionExecution = 0;
+        parent.active->pendingAction = 0;
+        parent.active->onCancel = {};
+        const auto& parentTransition = parent.plan->document.transitions[
+            parent.plan->transitions[
+                parent.active->transitionIndex].documentIndex];
+        appendTrace(parent.active->generation, executionId,
+            parentTransition.id,
+            "subflow '" + returnedFlow + "' returned");
+        driveActions();
+        return true;
     }
 
     void driveActions()
     {
-        while (active.has_value()) {
-            const auto& normalized = plan->transitions[active->transitionIndex];
-            const auto& transition = plan->document.transitions[
+        while (!frames.empty() && frames.back().active.has_value()) {
+            Frame& frame = frames.back();
+            ActiveTransition& active = *frame.active;
+            if (active.waitingForSubflow) return;
+            const auto& normalized =
+                frame.plan->transitions[active.transitionIndex];
+            const auto& transition = frame.plan->document.transitions[
                 normalized.documentIndex];
-            if (active->nextAction >= transition.actions.size()) {
-                finish(GameFlowActionState::Succeeded, {});
+            if (active.nextAction >= transition.actions.size()) {
+                finishTop(GameFlowActionState::Succeeded, {});
                 return;
             }
 
-            active->activeActionIndex = active->nextAction++;
-            const auto& action = transition.actions[active->activeActionIndex];
+            active.activeActionIndex = active.nextAction++;
+            const auto& action = transition.actions[active.activeActionIndex];
+            if (action.action == kGameFlowActionEnter) {
+                (void)enterSubflow(action);
+                return;
+            }
+            if (action.action == kGameFlowActionReturn) {
+                (void)returnFromSubflow(action);
+                return;
+            }
+
             const auto* definition = registry->findAction(action.action);
             const auto* handler = registry->findActionHandler(action.action);
             if (definition == nullptr || handler == nullptr) {
-                finish(GameFlowActionState::Failed,
+                finishTop(GameFlowActionState::Failed,
                     "action '" + action.action + "' is unavailable");
                 return;
             }
 
             const GameFlowActionExecutionId executionId =
                 nextActionExecutionId++;
-            active->activeActionExecution = executionId;
+            active.activeActionExecution = executionId;
             GameFlowActionResult result;
             try {
-                const auto& intent = plan->document.intents[
-                    active->request.intentIndex];
+                const auto& intent = frame.plan->document.intents[
+                    active.request.intentIndex];
                 const GameFlowActionInvocation invocation{
-                    active->generation,
+                    active.generation,
                     executionId,
-                    plan->document.id,
+                    frame.plan->document.id,
                     transition.id,
                     intent.id,
-                    &active->request.payload,
+                    &active.request.payload,
                     &action.arguments,
+                    &frame.parameters,
+                    &frame.lastSubflowResult,
+                    frame.returnedFlowId,
                 };
-                appendTrace(active->generation, executionId, transition.id,
+                appendTrace(active.generation, executionId, transition.id,
                     "starting action '" + action.action + "'");
                 result = (*handler)(invocation);
             } catch (const std::exception& exception) {
@@ -372,51 +590,74 @@ public:
 
             if (result.state == GameFlowActionState::Pending) {
                 if (!definition->asynchronous) {
-                    finish(GameFlowActionState::Failed,
+                    finishTop(GameFlowActionState::Failed,
                         "synchronous action '" + action.action
                             + "' returned Pending");
                     return;
                 }
-                active->pendingAction = executionId;
-                active->onCancel = std::move(result.onCancel);
-                appendTrace(active->generation, executionId, transition.id,
+                active.pendingAction = executionId;
+                active.onCancel = std::move(result.onCancel);
+                appendTrace(active.generation, executionId, transition.id,
                     "action pending");
                 return;
             }
             if (result.state == GameFlowActionState::Succeeded) {
-                active->activeActionIndex = kNoGameFlowActionIndex;
-                active->activeActionExecution = 0;
+                active.activeActionIndex = kNoGameFlowActionIndex;
+                active.activeActionExecution = 0;
                 continue;
             }
-            finish(result.state, std::move(result.message));
+            finishTop(result.state, std::move(result.message));
             return;
         }
     }
 
-    void begin(std::size_t transitionIndex, IntentRequest request)
+    void acceptActionResult(GameFlowActionResult result)
     {
-        const auto& normalized = plan->transitions[transitionIndex];
-        const auto& transition = plan->document.transitions[
+        if (frames.empty() || !frames.back().active.has_value()) return;
+        ActiveTransition& active = *frames.back().active;
+        if (result.state == GameFlowActionState::Succeeded) {
+            active.pendingAction = 0;
+            active.activeActionIndex = kNoGameFlowActionIndex;
+            active.activeActionExecution = 0;
+            active.onCancel = {};
+            driveActions();
+            return;
+        }
+        if (result.state == GameFlowActionState::Pending) return;
+        active.pendingAction = 0;
+        active.onCancel = {};
+        finishTop(result.state, std::move(result.message));
+    }
+
+    void beginTop(std::size_t transitionIndex, IntentRequest request)
+    {
+        Frame& frame = frames.back();
+        const auto& normalized = frame.plan->transitions[transitionIndex];
+        const auto& transition = frame.plan->document.transitions[
             normalized.documentIndex];
         ActiveTransition value;
         value.generation = nextGeneration++;
         value.transitionIndex = transitionIndex;
         value.request = std::move(request);
-        active = std::move(value);
-        appendTrace(active->generation, 0, transition.id,
+        frame.lastSubflowResult.clear();
+        frame.returnedFlowId.clear();
+        frame.active = std::move(value);
+        appendTrace(frame.active->generation, 0, transition.id,
             "transition started");
         driveActions();
     }
 
-    void invokeCancellation() noexcept
+    std::size_t queuedCount() const noexcept
     {
-        if (!active.has_value() || !active->onCancel) return;
-        auto callback = std::move(active->onCancel);
-        try {
-            callback();
-        } catch (...) {
-            // Cancellation is best-effort and never changes the selected route.
-        }
+        std::size_t count = 0;
+        for (const auto& frame : frames) count += frame.requests.size();
+        return count;
+    }
+
+    bool anyActive() const noexcept
+    {
+        return std::any_of(frames.begin(), frames.end(),
+            [](const Frame& frame) { return frame.active.has_value(); });
     }
 };
 
@@ -440,83 +681,139 @@ bool GameFlowCoordinator::setPlan(
         if (error != nullptr) *error = "GameFlow plan and registry are required.";
         return false;
     }
+    if (hasControlActions(*plan)) {
+        if (error != nullptr) {
+            *error = "A GameFlowProgram is required for flow.enter/flow.return.";
+        }
+        return false;
+    }
     const auto initial = plan->stateIndices.find(plan->document.initialState);
     if (initial == plan->stateIndices.end()) {
         if (error != nullptr) *error = "GameFlow plan has no valid initial state.";
         return false;
     }
-    _impl->plan = plan;
+    _impl->legacyPlan = plan;
     _impl->registry = registry;
-    _impl->currentStateIndex = _impl->resolveInitial(initial->second);
+    _impl->frames.push_back(_impl->makeFrame(plan, {}));
     _impl->appendTrace(0, 0, {}, "flow initialized");
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool GameFlowCoordinator::setProgram(
+    const GameFlowProgram* program,
+    const GameFlowActionRegistry* registry,
+    GameFlowPayload rootParameters,
+    std::string* error)
+{
+    reset();
+    if (program == nullptr || registry == nullptr) {
+        if (error != nullptr) {
+            *error = "GameFlow program and registry are required.";
+        }
+        return false;
+    }
+    const GameFlowPlan* root = program->findPlan(program->rootFlowId);
+    if (root == nullptr) {
+        if (error != nullptr) *error = "GameFlow program has no root plan.";
+        return false;
+    }
+    std::string localError;
+    if (!normalizePayload(root->document.entryParameters,
+            "Root flow entry", rootParameters, nullptr, {}, localError)) {
+        if (error != nullptr) *error = std::move(localError);
+        return false;
+    }
+    _impl->program = program;
+    _impl->registry = registry;
+    _impl->frames.push_back(_impl->makeFrame(root, std::move(rootParameters)));
+    if (_impl->frames.back().currentStateIndex == kNoState) {
+        reset();
+        if (error != nullptr) {
+            *error = "GameFlow root plan has no valid initial state.";
+        }
+        return false;
+    }
+    _impl->appendTrace(0, 0, {}, "program initialized");
     if (error != nullptr) error->clear();
     return true;
 }
 
 void GameFlowCoordinator::reset() noexcept
 {
-    _impl->invokeCancellation();
-    _impl->active.reset();
-    _impl->requests.clear();
-    _impl->plan = nullptr;
+    _impl->cancelFramesFrom(0u);
+    _impl->frames.clear();
+    _impl->program = nullptr;
+    _impl->legacyPlan = nullptr;
     _impl->registry = nullptr;
-    _impl->currentStateIndex = kNoState;
 }
 
 GameFlowRequestResult GameFlowCoordinator::request(
     std::string_view intent,
     GameFlowPayload payload)
 {
-    if (_impl->plan == nullptr || _impl->registry == nullptr) {
+    if (_impl->frames.empty() || _impl->registry == nullptr) {
         return {GameFlowRequestState::NotReady,
             "GameFlow coordinator has no plan."};
     }
-    const auto found = _impl->plan->intentIndices.find(intent);
-    if (found == _impl->plan->intentIndices.end()) {
+    auto& frame = _impl->frames.back();
+    const auto found = frame.plan->intentIndices.find(intent);
+    if (found == frame.plan->intentIndices.end()) {
         return {GameFlowRequestState::UnknownIntent,
-            "Intent '" + std::string(intent) + "' is not declared."};
+            "Intent '" + std::string(intent) + "' is not declared by flow '"
+                + frame.plan->document.id + "'."};
     }
     std::string error;
-    if (!normalizePayload(
-            _impl->plan->document.intents[found->second], payload, error)) {
+    if (!normalizeIntentPayload(
+            frame.plan->document.intents[found->second], payload, error)) {
         return {GameFlowRequestState::InvalidPayload, std::move(error)};
     }
-    _impl->requests.push_back({found->second, std::move(payload)});
+    frame.requests.push_back({found->second, std::move(payload)});
     return {GameFlowRequestState::Queued, {}};
 }
 
 void GameFlowCoordinator::update(double deltaSeconds)
 {
-    if (_impl->plan == nullptr) return;
+    if (_impl->frames.empty()) return;
     if (!std::isfinite(deltaSeconds) || deltaSeconds < 0.0) deltaSeconds = 0.0;
 
-    if (_impl->active.has_value()) {
-        const auto& normalized =
-            _impl->plan->transitions[_impl->active->transitionIndex];
-        const auto& transition = _impl->plan->document.transitions[
-            normalized.documentIndex];
-        _impl->active->elapsedSeconds += deltaSeconds;
-        if (transition.timeoutSeconds > 0.0
-            && _impl->active->elapsedSeconds >= transition.timeoutSeconds) {
-            _impl->invokeCancellation();
-            _impl->finish(GameFlowActionState::Failed, "transition timed out");
+    std::size_t expired = kNoState;
+    for (std::size_t index = 0; index < _impl->frames.size(); ++index) {
+        auto& frame = _impl->frames[index];
+        if (!frame.active.has_value()) continue;
+        const auto& transition = frame.plan->document.transitions[
+            frame.plan->transitions[
+                frame.active->transitionIndex].documentIndex];
+        frame.active->elapsedSeconds += deltaSeconds;
+        if (expired == kNoState && transition.timeoutSeconds > 0.0
+            && frame.active->elapsedSeconds >= transition.timeoutSeconds) {
+            expired = index;
         }
+    }
+    if (expired != kNoState) {
+        _impl->cancelFramesFrom(expired);
+        _impl->frames.resize(expired + 1u);
+        _impl->finishTop(GameFlowActionState::Failed,
+            "transition timed out");
     }
 
     std::size_t safetyCounter = 0;
-    while (!_impl->active.has_value() && !_impl->requests.empty()
+    while (!_impl->frames.empty()
+           && !_impl->frames.back().active.has_value()
+           && !_impl->frames.back().requests.empty()
            && safetyCounter++ < 1024u) {
-        auto request = std::move(_impl->requests.front());
-        _impl->requests.pop_front();
-        const auto selected = _impl->selectTransition(request);
+        auto& frame = _impl->frames.back();
+        auto request = std::move(frame.requests.front());
+        frame.requests.pop_front();
+        const auto selected = _impl->selectTransition(frame, request);
         if (!selected.has_value()) {
-            const auto& intent = _impl->plan->document.intents[
+            const auto& intent = frame.plan->document.intents[
                 request.intentIndex];
             _impl->appendTrace(0, 0, {},
                 "no transition accepted intent '" + intent.id + "'");
             continue;
         }
-        _impl->begin(*selected, std::move(request));
+        _impl->beginTop(*selected, std::move(request));
     }
 }
 
@@ -525,9 +822,10 @@ bool GameFlowCoordinator::completeAction(
     GameFlowActionResult result,
     std::string* error)
 {
-    if (!_impl->active.has_value()
-        || _impl->active->pendingAction == 0
-        || _impl->active->pendingAction != executionId) {
+    if (_impl->frames.empty()
+        || !_impl->frames.back().active.has_value()
+        || _impl->frames.back().active->pendingAction == 0
+        || _impl->frames.back().active->pendingAction != executionId) {
         if (error != nullptr) {
             *error = "Action completion is stale or does not match pending work.";
         }
@@ -544,68 +842,171 @@ bool GameFlowCoordinator::completeAction(
 
 bool GameFlowCoordinator::cancelActive(std::string message)
 {
-    if (!_impl->active.has_value()) return false;
-    _impl->invokeCancellation();
-    _impl->finish(GameFlowActionState::Cancelled, std::move(message));
+    if (_impl->frames.empty()
+        || !_impl->frames.back().active.has_value()) return false;
+    _impl->invokeCancellation(_impl->frames.back());
+    _impl->finishTop(GameFlowActionState::Cancelled, std::move(message));
+    return true;
+}
+
+bool GameFlowCoordinator::cancelSubflowCall(std::string message)
+{
+    if (_impl->frames.size() <= 1u) return false;
+    _impl->cancelFramesFrom(1u);
+    _impl->frames.resize(1u);
+    if (!_impl->frames.back().active.has_value()
+        || !_impl->frames.back().active->waitingForSubflow) return false;
+    _impl->finishTop(GameFlowActionState::Cancelled, std::move(message));
     return true;
 }
 
 std::string_view GameFlowCoordinator::currentState() const noexcept
 {
-    if (_impl->plan == nullptr || _impl->currentStateIndex == kNoState) return {};
-    return _impl->plan->document.states[_impl->currentStateIndex].id;
+    if (_impl->frames.empty()) return {};
+    const auto& frame = _impl->frames.back();
+    if (frame.currentStateIndex == kNoState) return {};
+    return frame.plan->document.states[frame.currentStateIndex].id;
+}
+
+std::string_view GameFlowCoordinator::currentFlow() const noexcept
+{
+    return _impl->frames.empty()
+        ? std::string_view{} : std::string_view(
+            _impl->frames.back().plan->document.id);
+}
+
+std::string GameFlowCoordinator::qualifiedState() const
+{
+    if (_impl->frames.empty()) return {};
+    return std::string(currentFlow()) + "::" + std::string(currentState());
+}
+
+std::size_t GameFlowCoordinator::callDepth() const noexcept
+{
+    return _impl->frames.empty() ? 0u : _impl->frames.size() - 1u;
 }
 
 std::string_view GameFlowCoordinator::activeTransition() const noexcept
 {
-    if (_impl->plan == nullptr || !_impl->active.has_value()) return {};
+    if (_impl->frames.empty()
+        || !_impl->frames.back().active.has_value()
+        || _impl->frames.back().active->waitingForSubflow) return {};
+    const auto& frame = _impl->frames.back();
     const auto& normalized =
-        _impl->plan->transitions[_impl->active->transitionIndex];
-    return _impl->plan->document.transitions[normalized.documentIndex].id;
+        frame.plan->transitions[frame.active->transitionIndex];
+    return frame.plan->document.transitions[normalized.documentIndex].id;
 }
 
 GameFlowGeneration GameFlowCoordinator::activeGeneration() const noexcept
 {
-    return _impl->active.has_value() ? _impl->active->generation : 0;
+    if (_impl->frames.empty()
+        || !_impl->frames.back().active.has_value()) return 0;
+    return _impl->frames.back().active->generation;
 }
 
 GameFlowActionExecutionId GameFlowCoordinator::pendingAction() const noexcept
 {
-    return _impl->active.has_value() ? _impl->active->pendingAction : 0;
+    if (_impl->frames.empty()
+        || !_impl->frames.back().active.has_value()) return 0;
+    return _impl->frames.back().active->pendingAction;
 }
 
 std::size_t GameFlowCoordinator::queuedIntentCount() const noexcept
 {
-    return _impl->requests.size();
+    return _impl->queuedCount();
 }
 
 bool GameFlowCoordinator::busy() const noexcept
 {
-    return _impl->active.has_value();
+    return _impl->anyActive();
+}
+
+bool GameFlowCoordinator::reloadSafePoint() const noexcept
+{
+    return _impl->frames.size() == 1u
+        && !_impl->frames.front().active.has_value()
+        && _impl->frames.front().requests.empty();
+}
+
+bool GameFlowCoordinator::restoreState(
+    std::string_view flowId,
+    std::string_view stateId,
+    std::string* error)
+{
+    if (!reloadSafePoint()) {
+        if (error != nullptr) *error = "GameFlow is not at a reload safe point.";
+        return false;
+    }
+    auto& frame = _impl->frames.front();
+    if (frame.plan->document.id != flowId) {
+        if (error != nullptr) *error = "Reloaded GameFlow root id changed.";
+        return false;
+    }
+    const auto state = frame.plan->stateIndices.find(stateId);
+    if (state == frame.plan->stateIndices.end()) {
+        if (error != nullptr) {
+            *error = "Reloaded GameFlow does not contain state '"
+                + std::string(stateId) + "'.";
+        }
+        return false;
+    }
+    frame.currentStateIndex = _impl->resolveInitial(*frame.plan, state->second);
+    _impl->appendTrace(0, 0, {}, "state restored after reload", 0u);
+    if (error != nullptr) error->clear();
+    return true;
 }
 
 GameFlowCoordinatorSnapshot GameFlowCoordinator::snapshot() const
 {
     GameFlowCoordinatorSnapshot result;
     result.currentStateId = currentState();
-    result.queuedIntentCount = _impl->requests.size();
-    result.busy = _impl->active.has_value();
+    result.currentFlowId = currentFlow();
+    result.qualifiedStateId = qualifiedState();
+    result.callDepth = callDepth();
+    result.queuedIntentCount = _impl->queuedCount();
+    result.busy = _impl->anyActive();
+    result.frames.reserve(_impl->frames.size());
+    for (const auto& frame : _impl->frames) {
+        GameFlowStackFrameSnapshot snapshot;
+        snapshot.instanceSerial = frame.instanceSerial;
+        snapshot.flowId = frame.plan->document.id;
+        if (frame.currentStateIndex != kNoState) {
+            snapshot.stateId = frame.plan->document.states[
+                frame.currentStateIndex].id;
+        }
+        if (frame.active.has_value() && frame.active->waitingForSubflow) {
+            const auto& normalized = frame.plan->transitions[
+                frame.active->transitionIndex];
+            snapshot.suspendedTransitionId =
+                frame.plan->document.transitions[
+                    normalized.documentIndex].id;
+        }
+        result.frames.push_back(std::move(snapshot));
+    }
 
-    if (_impl->plan == nullptr || _impl->registry == nullptr) {
+    if (_impl->frames.empty() || _impl->registry == nullptr) {
         result.status = GameFlowCoordinatorStatus::NotReady;
         return result;
     }
-    if (!_impl->active.has_value()) {
-        result.status = _impl->requests.empty()
-            ? GameFlowCoordinatorStatus::Idle
-            : GameFlowCoordinatorStatus::Queued;
+    const auto& frame = _impl->frames.back();
+    if (!frame.active.has_value()) {
+        if (!frame.requests.empty()) {
+            result.status = GameFlowCoordinatorStatus::Queued;
+        } else if (_impl->frames.size() > 1u) {
+            result.status = GameFlowCoordinatorStatus::WaitingForSubflow;
+        } else {
+            result.status = GameFlowCoordinatorStatus::Idle;
+        }
+        return result;
+    }
+    if (frame.active->waitingForSubflow) {
+        result.status = GameFlowCoordinatorStatus::WaitingForSubflow;
         return result;
     }
 
-    const auto& active = *_impl->active;
-    const auto& normalized = _impl->plan->transitions[
-        active.transitionIndex];
-    const auto& transition = _impl->plan->document.transitions[
+    const auto& active = *frame.active;
+    const auto& normalized = frame.plan->transitions[active.transitionIndex];
+    const auto& transition = frame.plan->document.transitions[
         normalized.documentIndex];
     result.status = active.pendingAction == 0
         ? GameFlowCoordinatorStatus::Running

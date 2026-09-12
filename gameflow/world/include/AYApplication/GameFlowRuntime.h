@@ -1,6 +1,6 @@
 #pragma once
 
-#include <AYApplication/GameFlowCoordinator.h>
+#include <AYApplication/GameFlowProgram.h>
 #include <AYGameLoop/IGameLoop.h>
 
 #include <functional>
@@ -26,12 +26,16 @@ struct GameFlowRuntimeConfig
 {
     std::string documentPath;
     ConfigureGameFlowRegistry configureRegistry;
+    GameFlowDocumentResolver resolveDocument;
+    GameFlowProgramBuildOptions programOptions;
+    GameFlowPayload rootParameters;
     bool enableWorldActions = true;
     std::string startupIntent = "app.start";
 };
 
 // Immutable startup product built before the Application creates platform
-// services. It owns the registry and normalized plan used by the runtime.
+// services. It owns the registry and complete normalized program used by the
+// runtime.
 class GameFlowRuntimePreparation final
 {
 public:
