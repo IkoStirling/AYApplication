@@ -107,6 +107,137 @@ bool hasControlActions(const GameFlowPlan& plan) noexcept
     return false;
 }
 
+GameFlowDeterminismOutcome determinismOutcome(
+    GameFlowActionState value) noexcept
+{
+    switch (value) {
+    case GameFlowActionState::Succeeded:
+        return GameFlowDeterminismOutcome::Succeeded;
+    case GameFlowActionState::Failed:
+        return GameFlowDeterminismOutcome::Failed;
+    case GameFlowActionState::Pending:
+        return GameFlowDeterminismOutcome::Pending;
+    case GameFlowActionState::Cancelled:
+        return GameFlowDeterminismOutcome::Cancelled;
+    }
+    return GameFlowDeterminismOutcome::Failed;
+}
+
+std::optional<GameFlowActionState> actionState(
+    GameFlowDeterminismOutcome value) noexcept
+{
+    switch (value) {
+    case GameFlowDeterminismOutcome::Succeeded:
+        return GameFlowActionState::Succeeded;
+    case GameFlowDeterminismOutcome::Failed:
+        return GameFlowActionState::Failed;
+    case GameFlowDeterminismOutcome::Pending:
+        return GameFlowActionState::Pending;
+    case GameFlowDeterminismOutcome::Cancelled:
+        return GameFlowActionState::Cancelled;
+    default:
+        return std::nullopt;
+    }
+}
+
+bool sameDeterminismContext(
+    const GameFlowDeterminismRecord& expected,
+    const GameFlowDeterminismRecord& actual,
+    std::string& error)
+{
+    const auto mismatch = [&](std::string_view field) {
+        error = "GameFlow playback mismatch at sequence "
+            + std::to_string(expected.sequence) + " (" + std::string(field)
+            + ").";
+        return false;
+    };
+    if (actual.schemaVersion != kGameFlowDeterminismSchemaVersion) {
+        return mismatch("schemaVersion");
+    }
+    if (actual.sequence != expected.sequence) return mismatch("sequence");
+    if (actual.kind != expected.kind) return mismatch("kind");
+    if (actual.flowId != expected.flowId) return mismatch("flowId");
+    if (actual.stateId != expected.stateId) return mismatch("stateId");
+    if (actual.intentId != expected.intentId) return mismatch("intentId");
+    if (actual.generation != expected.generation) return mismatch("generation");
+    if (actual.actionExecutionId != expected.actionExecutionId) {
+        return mismatch("actionExecutionId");
+    }
+    if (actual.callDepth != expected.callDepth) return mismatch("callDepth");
+
+    switch (expected.kind) {
+    case GameFlowDeterminismKind::Intent:
+        if (actual.intentOrigin != expected.intentOrigin) {
+            return mismatch("intentOrigin");
+        }
+        if (actual.payload != expected.payload) return mismatch("payload");
+        break;
+    case GameFlowDeterminismKind::Update:
+        if (actual.deltaSeconds != expected.deltaSeconds) {
+            return mismatch("deltaSeconds");
+        }
+        break;
+    case GameFlowDeterminismKind::GuardOutcome:
+        if (actual.transitionId != expected.transitionId) {
+            return mismatch("transitionId");
+        }
+        if (actual.guardId != expected.guardId) return mismatch("guardId");
+        break;
+    case GameFlowDeterminismKind::TransitionDecision:
+        break;
+    case GameFlowDeterminismKind::ActionOutcome:
+        if (actual.transitionId != expected.transitionId) {
+            return mismatch("transitionId");
+        }
+        if (actual.actionId != expected.actionId) return mismatch("actionId");
+        break;
+    case GameFlowDeterminismKind::AsyncCompletion:
+        if (actual.transitionId != expected.transitionId) {
+            return mismatch("transitionId");
+        }
+        if (actual.actionId != expected.actionId) return mismatch("actionId");
+        break;
+    case GameFlowDeterminismKind::Cancellation:
+        if (actual.cancellation != expected.cancellation) {
+            return mismatch("cancellation");
+        }
+        if (actual.transitionId != expected.transitionId) {
+            return mismatch("transitionId");
+        }
+        if (actual.intentId != expected.intentId) return mismatch("intentId");
+        if (actual.targetFlowId != expected.targetFlowId) {
+            return mismatch("targetFlowId");
+        }
+        break;
+    case GameFlowDeterminismKind::SubflowEnter:
+    case GameFlowDeterminismKind::SubflowReturn:
+        if (actual.transitionId != expected.transitionId) {
+            return mismatch("transitionId");
+        }
+        if (actual.targetFlowId != expected.targetFlowId) {
+            return mismatch("targetFlowId");
+        }
+        break;
+    case GameFlowDeterminismKind::Terminal:
+        if (actual.transitionId != expected.transitionId) {
+            return mismatch("transitionId");
+        }
+        if (actual.resultStateId != expected.resultStateId) {
+            return mismatch("resultStateId");
+        }
+        if (actual.outcome != expected.outcome) return mismatch("outcome");
+        break;
+    case GameFlowDeterminismKind::ProgramManifest:
+        if (actual.programFingerprint != expected.programFingerprint) {
+            return mismatch("programFingerprint");
+        }
+        if (actual.payload != expected.payload) return mismatch("payload");
+        break;
+    }
+    error.clear();
+    return true;
+}
+
 } // namespace
 
 bool buildGameFlowPlan(
@@ -254,6 +385,33 @@ public:
     std::vector<GameFlowTraceEntry> traces;
     GameFlowDiagnostics diagnostics;
     std::size_t publicCallDepth = 0;
+    std::size_t externalCallbackDepth = 0;
+    GameFlowDeterminismIntentOrigin callbackOrigin =
+        GameFlowDeterminismIntentOrigin::External;
+    IGameFlowDeterminismExchange* determinism = nullptr;
+    std::uint64_t nextDeterminismSequence = 1;
+    std::optional<GameFlowDeterminismRecord> bufferedPlaybackRecord;
+    bool determinismFaulted = false;
+    std::string determinismFault;
+
+    struct ExternalCallbackScope
+    {
+        explicit ExternalCallbackScope(
+            Impl& value,
+            GameFlowDeterminismIntentOrigin origin) noexcept
+            : owner(value), previous(value.callbackOrigin)
+        {
+            ++owner.externalCallbackDepth;
+            owner.callbackOrigin = origin;
+        }
+        ~ExternalCallbackScope()
+        {
+            owner.callbackOrigin = previous;
+            --owner.externalCallbackDepth;
+        }
+        Impl& owner;
+        GameFlowDeterminismIntentOrigin previous;
+    };
 
     struct PublicCallScope
     {
@@ -289,6 +447,225 @@ public:
         double deltaSeconds = 0.0;
         Clock::time_point started;
     };
+
+    [[nodiscard]] bool mutationAllowed(std::string* error = nullptr) const
+    {
+        if (determinismFaulted) {
+            if (error != nullptr) {
+                *error = determinismFault.empty()
+                    ? "GameFlow determinism exchange failed."
+                    : determinismFault;
+            }
+            return false;
+        }
+        if (externalCallbackDepth != 0u) {
+            if (error != nullptr) {
+                *error = "GameFlow mutation is not allowed from a callback; "
+                    "request() is the reentrant-safe ingress.";
+            }
+            return false;
+        }
+        return true;
+    }
+
+    void retainDeterminismFault(std::string message) noexcept
+    {
+        if (determinismFaulted) return;
+        determinismFaulted = true;
+        try {
+            determinismFault = message.empty()
+                ? "GameFlow determinism exchange failed." : std::move(message);
+            appendTrace(0, 0, {}, determinismFault);
+        } catch (...) {
+            try {
+                determinismFault = "GameFlow determinism exchange failed.";
+            } catch (...) {
+            }
+        }
+    }
+
+    bool readDeterminismRecord(
+        GameFlowDeterminismRecord& record, std::string& error)
+    {
+        if (bufferedPlaybackRecord.has_value()) {
+            record = std::move(*bufferedPlaybackRecord);
+            bufferedPlaybackRecord.reset();
+            error.clear();
+            return true;
+        }
+        bool ok = false;
+        try {
+            ExternalCallbackScope callback(*this,
+                GameFlowDeterminismIntentOrigin::DeterminismExchange);
+            ok = determinism->exchange(record, error);
+        } catch (const std::exception& exception) {
+            error = std::string("GameFlow determinism exchange threw: ")
+                + exception.what();
+        } catch (...) {
+            error = "GameFlow determinism exchange threw.";
+        }
+        if (!ok) {
+            if (error.empty() && !determinism->healthy()) {
+                error = std::string(determinism->fault());
+            }
+            retainDeterminismFault(std::move(error));
+            return false;
+        }
+        return true;
+    }
+
+    bool injectRecordedIntent(
+        const GameFlowDeterminismRecord& actual,
+        GameFlowDeterminismIntentOrigin allowedOrigin,
+        std::string& error)
+    {
+        if (actual.kind != GameFlowDeterminismKind::Intent) {
+            error = "GameFlow playback callback injection expected an intent.";
+            return false;
+        }
+        const bool observerIntent = actual.intentOrigin
+            == GameFlowDeterminismIntentOrigin::ObserverCallback;
+        if (!observerIntent && actual.intentOrigin != allowedOrigin) {
+            error = "GameFlow playback encountered an intent from an "
+                "unexpected callback origin.";
+            return false;
+        }
+        if (actual.intentOrigin
+            == GameFlowDeterminismIntentOrigin::DeterminismExchange
+            || actual.intentOrigin
+                == GameFlowDeterminismIntentOrigin::External) {
+            error = "GameFlow playback cannot inject this intent origin.";
+            return false;
+        }
+        if (actual.callDepth >= frames.size()) {
+            error = "GameFlow playback callback intent targets an unavailable "
+                "flow frame.";
+            return false;
+        }
+        Frame& frame = frames[actual.callDepth];
+        const auto found = frame.plan->intentIndices.find(actual.intentId);
+        if (found == frame.plan->intentIndices.end()) {
+            error = "GameFlow playback callback intent is not declared by its "
+                "recorded flow.";
+            return false;
+        }
+        GameFlowPayload normalized = actual.payload;
+        if (!normalizeIntentPayload(
+                frame.plan->document.intents[found->second], normalized, error)
+            || normalized != actual.payload) {
+            if (error.empty()) {
+                error = "GameFlow playback callback intent payload is not "
+                    "canonical.";
+            }
+            return false;
+        }
+        auto expected = this->record(
+            GameFlowDeterminismKind::Intent, actual.callDepth);
+        expected.schemaVersion = kGameFlowDeterminismSchemaVersion;
+        expected.sequence = nextDeterminismSequence;
+        expected.intentOrigin = actual.intentOrigin;
+        expected.intentId = actual.intentId;
+        expected.payload = actual.payload;
+        if (!sameDeterminismContext(expected, actual, error)) return false;
+
+        frame.requests.push_back({found->second, actual.payload});
+        emit(GameFlowEventKind::IntentQueued,
+            GameFlowEventReason::None, 0, 0, {}, actual.intentId, {}, {},
+            actual.callDepth);
+        ++nextDeterminismSequence;
+        return true;
+    }
+
+    bool exchange(GameFlowDeterminismRecord& record,
+                  GameFlowDeterminismIntentOrigin callbackIntentOrigin =
+                      GameFlowDeterminismIntentOrigin::DeterminismExchange)
+    {
+        if (determinismFaulted) return false;
+        if (determinism == nullptr) return true;
+        record.schemaVersion = kGameFlowDeterminismSchemaVersion;
+        const GameFlowDeterminismRecord expectedBase = record;
+        for (;;) {
+            GameFlowDeterminismRecord expected = expectedBase;
+            expected.sequence = nextDeterminismSequence;
+            record = expected;
+            std::string error;
+            if (!readDeterminismRecord(record, error)) return false;
+            if (determinism->mode() == GameFlowDeterminismMode::Playback) {
+                const bool matchingIntentOrigin = expected.kind
+                        == GameFlowDeterminismKind::Intent
+                    && record.kind == GameFlowDeterminismKind::Intent
+                    && expected.intentOrigin == record.intentOrigin;
+                const bool mayInject = record.kind
+                        == GameFlowDeterminismKind::Intent
+                    && !matchingIntentOrigin
+                    && (record.intentOrigin
+                            == GameFlowDeterminismIntentOrigin::ObserverCallback
+                        || record.intentOrigin == callbackIntentOrigin);
+                if (mayInject) {
+                    if (!injectRecordedIntent(
+                            record, callbackIntentOrigin, error)) {
+                        retainDeterminismFault(std::move(error));
+                        return false;
+                    }
+                    continue;
+                }
+                if (!sameDeterminismContext(expected, record, error)) {
+                    retainDeterminismFault(std::move(error));
+                    return false;
+                }
+            }
+            ++nextDeterminismSequence;
+            return true;
+        }
+    }
+
+    bool drainCallbackIntents(GameFlowDeterminismIntentOrigin origin) noexcept
+    {
+        if (determinismFaulted || determinism == nullptr
+            || determinism->mode() != GameFlowDeterminismMode::Playback) {
+            return !determinismFaulted;
+        }
+        try {
+            for (;;) {
+                GameFlowDeterminismRecord actual;
+                std::string error;
+                if (!readDeterminismRecord(actual, error)) return false;
+                if (actual.kind != GameFlowDeterminismKind::Intent
+                    || actual.intentOrigin != origin) {
+                    bufferedPlaybackRecord = std::move(actual);
+                    return true;
+                }
+                if (!injectRecordedIntent(actual, origin, error)) {
+                    retainDeterminismFault(std::move(error));
+                    return false;
+                }
+            }
+        } catch (const std::exception& exception) {
+            retainDeterminismFault(
+                std::string("GameFlow callback intent injection threw: ")
+                + exception.what());
+        } catch (...) {
+            retainDeterminismFault(
+                "GameFlow callback intent injection threw.");
+        }
+        return false;
+    }
+
+    GameFlowDeterminismRecord record(GameFlowDeterminismKind kind,
+                                     std::size_t frameIndex) const
+    {
+        GameFlowDeterminismRecord value;
+        value.kind = kind;
+        value.callDepth = frameIndex;
+        if (frameIndex >= frames.size()) return value;
+        const Frame& frame = frames[frameIndex];
+        value.flowId = frame.plan->document.id;
+        if (frame.currentStateIndex != kNoState) {
+            value.stateId = frame.plan->document.states[
+                frame.currentStateIndex].id;
+        }
+        return value;
+    }
 
     std::size_t resolveInitial(const GameFlowPlan& plan,
                                std::size_t stateIndex) const
@@ -407,54 +784,125 @@ public:
                         frame.plan->transitions[transitionIndex];
                     const auto& transition = frame.plan->document.transitions[
                         normalized.documentIndex];
-                    if (transition.guard.guard.empty()) return transitionIndex;
-                    const auto* handler = registry->findGuardHandler(
-                        transition.guard.guard);
-                    if (handler == nullptr) {
-                        emit(GameFlowEventKind::GuardFailed,
-                            GameFlowEventReason::MissingHandler, 0, 0,
+                    if (transition.guard.guard.empty()) {
+                        auto decision = record(
+                            GameFlowDeterminismKind::TransitionDecision,
+                            frames.size() - 1u);
+                        decision.intentId = intent.id;
+                        decision.transitionId = transition.id;
+                        decision.outcome = GameFlowDeterminismOutcome::Accepted;
+                        if (!exchange(decision)) return std::nullopt;
+                        if (decision.outcome !=
+                                GameFlowDeterminismOutcome::Accepted
+                            || decision.transitionId != transition.id) {
+                            retainDeterminismFault(
+                                "GameFlow playback selected an invalid "
+                                "unguarded transition.");
+                            return std::nullopt;
+                        }
+                        return transitionIndex;
+                    }
+
+                    auto guardRecord = record(
+                        GameFlowDeterminismKind::GuardOutcome,
+                        frames.size() - 1u);
+                    guardRecord.intentId = intent.id;
+                    guardRecord.transitionId = transition.id;
+                    guardRecord.guardId = transition.guard.guard;
+                    GameFlowEventReason failureReason =
+                        GameFlowEventReason::None;
+                    if (determinism != nullptr
+                        && determinism->mode()
+                            == GameFlowDeterminismMode::Playback) {
+                        if (!exchange(guardRecord,
+                                GameFlowDeterminismIntentOrigin::GuardCallback)) {
+                            return std::nullopt;
+                        }
+                    } else {
+                        const auto* handler = registry->findGuardHandler(
+                            transition.guard.guard);
+                        if (handler == nullptr) {
+                            guardRecord.outcome =
+                                GameFlowDeterminismOutcome::Failed;
+                            failureReason = GameFlowEventReason::MissingHandler;
+                        } else {
+                            try {
+                                const GameFlowGuardInvocation invocation{
+                                    frame.plan->document.id,
+                                    transition.id,
+                                    intent.id,
+                                    &request.payload,
+                                    &transition.guard.arguments,
+                                    &frame.parameters,
+                                    &frame.lastSubflowResult,
+                                    frame.returnedFlowId,
+                                };
+                                ExternalCallbackScope callback(*this,
+                                    GameFlowDeterminismIntentOrigin::GuardCallback);
+                                guardRecord.outcome = (*handler)(invocation)
+                                    ? GameFlowDeterminismOutcome::Accepted
+                                    : GameFlowDeterminismOutcome::Rejected;
+                            } catch (const std::exception& exception) {
+                                guardRecord.outcome =
+                                    GameFlowDeterminismOutcome::Failed;
+                                failureReason =
+                                    GameFlowEventReason::HandlerException;
+                                appendTrace(0, 0, transition.id,
+                                    std::string("guard threw: ")
+                                        + exception.what());
+                            } catch (...) {
+                                guardRecord.outcome =
+                                    GameFlowDeterminismOutcome::Failed;
+                                failureReason =
+                                    GameFlowEventReason::HandlerException;
+                                appendTrace(0, 0, transition.id,
+                                    "guard threw an unknown exception");
+                            }
+                        }
+                        if (!exchange(guardRecord,
+                                GameFlowDeterminismIntentOrigin::GuardCallback)) {
+                            return std::nullopt;
+                        }
+                    }
+
+                    if (guardRecord.outcome
+                        == GameFlowDeterminismOutcome::Accepted) {
+                        emit(GameFlowEventKind::GuardAccepted,
+                            GameFlowEventReason::None, 0, 0,
                             transition.id, intent.id, {},
                             transition.guard.guard);
-                        appendTrace(0, 0, transition.id,
-                            "registered guard handler is unavailable");
-                        continue;
-                    }
-                    try {
-                        const GameFlowGuardInvocation invocation{
-                            frame.plan->document.id,
-                            transition.id,
-                            intent.id,
-                            &request.payload,
-                            &transition.guard.arguments,
-                            &frame.parameters,
-                            &frame.lastSubflowResult,
-                            frame.returnedFlowId,
-                        };
-                        if ((*handler)(invocation)) {
-                            emit(GameFlowEventKind::GuardAccepted,
-                                GameFlowEventReason::None, 0, 0,
-                                transition.id, intent.id, {},
-                                transition.guard.guard);
-                            return transitionIndex;
+                        auto decision = record(
+                            GameFlowDeterminismKind::TransitionDecision,
+                            frames.size() - 1u);
+                        decision.intentId = intent.id;
+                        decision.transitionId = transition.id;
+                        decision.outcome = GameFlowDeterminismOutcome::Accepted;
+                        if (!exchange(decision)) return std::nullopt;
+                        if (decision.outcome !=
+                                GameFlowDeterminismOutcome::Accepted
+                            || decision.transitionId != transition.id) {
+                            retainDeterminismFault(
+                                "GameFlow playback transition decision drifted "
+                                "from its guard outcome.");
+                            return std::nullopt;
                         }
+                        return transitionIndex;
+                    }
+                    if (guardRecord.outcome
+                        == GameFlowDeterminismOutcome::Rejected) {
                         emit(GameFlowEventKind::GuardRejected,
                             GameFlowEventReason::None, 0, 0,
                             transition.id, intent.id, {},
                             transition.guard.guard);
-                    } catch (const std::exception& exception) {
+                    } else if (guardRecord.outcome
+                        == GameFlowDeterminismOutcome::Failed) {
                         emit(GameFlowEventKind::GuardFailed,
-                            GameFlowEventReason::HandlerException, 0, 0,
-                            transition.id, intent.id, {},
-                            transition.guard.guard);
-                        appendTrace(0, 0, transition.id,
-                            std::string("guard threw: ") + exception.what());
-                    } catch (...) {
-                        emit(GameFlowEventKind::GuardFailed,
-                            GameFlowEventReason::HandlerException, 0, 0,
-                            transition.id, intent.id, {},
-                            transition.guard.guard);
-                        appendTrace(0, 0, transition.id,
-                            "guard threw an unknown exception");
+                            failureReason, 0, 0, transition.id, intent.id,
+                            {}, transition.guard.guard);
+                    } else {
+                        retainDeterminismFault(
+                            "GameFlow playback supplied an invalid guard outcome.");
+                        return std::nullopt;
                     }
                 }
             }
@@ -462,6 +910,16 @@ public:
             const auto parent = frame.plan->stateIndices.find(state.parent);
             if (parent == frame.plan->stateIndices.end()) break;
             stateIndex = parent->second;
+        }
+        auto decision = record(GameFlowDeterminismKind::TransitionDecision,
+            frames.size() - 1u);
+        decision.intentId = intent.id;
+        decision.outcome = GameFlowDeterminismOutcome::Unmatched;
+        if (!exchange(decision)) return std::nullopt;
+        if (decision.outcome != GameFlowDeterminismOutcome::Unmatched
+            || !decision.transitionId.empty()) {
+            retainDeterminismFault(
+                "GameFlow playback supplied an unavailable transition.");
         }
         return std::nullopt;
     }
@@ -520,6 +978,23 @@ public:
         case GameFlowActionState::Pending:
             return;
         }
+        const auto& intent = frame.plan->document.intents[
+            snapshot.request.intentIndex];
+        auto terminal = record(GameFlowDeterminismKind::Terminal,
+            frames.size() - 1u);
+        terminal.generation = snapshot.generation;
+        terminal.actionExecutionId = snapshot.pendingAction != 0
+            ? snapshot.pendingAction : snapshot.activeActionExecution;
+        terminal.transitionId = transition.id;
+        terminal.intentId = intent.id;
+        terminal.outcome = determinismOutcome(result);
+        if (routedState != kNoState) {
+            const std::size_t resolved = resolveInitial(*frame.plan, routedState);
+            if (resolved != kNoState) {
+                terminal.resultStateId = frame.plan->document.states[resolved].id;
+            }
+        }
+        if (!exchange(terminal)) return;
         frame.active.reset();
         frame.currentStateIndex = resolveInitial(*frame.plan, routedState);
         GameFlowEventKind eventKind = GameFlowEventKind::TransitionFailed;
@@ -530,8 +1005,6 @@ public:
         } else if (reason == GameFlowEventReason::Timeout) {
             eventKind = GameFlowEventKind::TransitionTimedOut;
         }
-        const auto& intent = frame.plan->document.intents[
-            snapshot.request.intentIndex];
         emit(eventKind, reason, snapshot.generation,
             snapshot.pendingAction != 0
                 ? snapshot.pendingAction : snapshot.activeActionExecution,
@@ -549,10 +1022,21 @@ public:
         if (frame.active->onCancel) {
             auto callback = std::move(frame.active->onCancel);
             try {
+                ExternalCallbackScope external(*this,
+                    GameFlowDeterminismIntentOrigin::CancellationCallback);
                 callback();
             } catch (...) {
                 // Cancellation is best-effort and never changes the route.
             }
+        }
+        if (hasPendingAction
+            && (reason == GameFlowEventReason::ExplicitCancellation
+                || reason == GameFlowEventReason::Timeout)) {
+            // Playback has no live cancellation closure. Consume and inject
+            // its captured requests while the cancelled frame still exists;
+            // buffer the following protocol record for the normal exchange.
+            (void)drainCallbackIntents(
+                GameFlowDeterminismIntentOrigin::CancellationCallback);
         }
         if (hasPendingAction) {
             emitActiveAction(frame, GameFlowEventKind::ActionCancelled,
@@ -567,6 +1051,7 @@ public:
         for (std::size_t index = frames.size(); index > first; --index) {
             Frame& frame = frames[index - 1u];
             invokeCancellation(frame, index - 1u, reason);
+            if (determinismFaulted) return;
             if (index - 1u > first || first > 0u) {
                 GameFlowGeneration generation = 0;
                 GameFlowActionExecutionId executionId = 0;
@@ -640,10 +1125,35 @@ public:
             return false;
         }
 
-        parent.lastSubflowResult.clear();
-        parent.returnedFlowId.clear();
         const GameFlowActionExecutionId executionId =
             nextActionExecutionId++;
+        auto deterministic = record(GameFlowDeterminismKind::SubflowEnter,
+            frames.size() - 1u);
+        deterministic.generation = active.generation;
+        deterministic.actionExecutionId = executionId;
+        deterministic.transitionId = transition.id;
+        deterministic.intentId = parent.plan->document.intents[
+            active.request.intentIndex].id;
+        deterministic.targetFlowId = *subflowId;
+        deterministic.payload = parameters;
+        if (!exchange(deterministic)) return false;
+        if (determinism != nullptr
+            && determinism->mode() == GameFlowDeterminismMode::Playback) {
+            GameFlowPayload normalizedPlayback = deterministic.payload;
+            if (!normalizePayload(child->document.entryParameters,
+                    "Recorded subflow entry", normalizedPlayback, nullptr, {},
+                    error)
+                || normalizedPlayback != deterministic.payload) {
+                retainDeterminismFault(error.empty()
+                    ? "Recorded subflow entry payload is not canonical."
+                    : std::move(error));
+                return false;
+            }
+            parameters = std::move(deterministic.payload);
+        }
+
+        parent.lastSubflowResult.clear();
+        parent.returnedFlowId.clear();
         active.activeActionExecution = executionId;
         active.waitingForSubflow = true;
         const GameFlowGeneration generation = active.generation;
@@ -685,6 +1195,30 @@ public:
 
         const GameFlowActionExecutionId executionId =
             nextActionExecutionId++;
+        auto deterministic = record(GameFlowDeterminismKind::SubflowReturn,
+            frames.size() - 1u);
+        deterministic.generation = childActive.generation;
+        deterministic.actionExecutionId = executionId;
+        deterministic.transitionId = childTransition.id;
+        deterministic.intentId = child.plan->document.intents[
+            childActive.request.intentIndex].id;
+        deterministic.targetFlowId = child.plan->document.id;
+        deterministic.payload = result;
+        if (!exchange(deterministic)) return false;
+        if (determinism != nullptr
+            && determinism->mode() == GameFlowDeterminismMode::Playback) {
+            GameFlowPayload normalizedPlayback = deterministic.payload;
+            if (!normalizePayload(child.plan->document.result,
+                    "Recorded subflow result", normalizedPlayback, nullptr, {},
+                    error)
+                || normalizedPlayback != deterministic.payload) {
+                retainDeterminismFault(error.empty()
+                    ? "Recorded subflow result payload is not canonical."
+                    : std::move(error));
+                return false;
+            }
+            result = std::move(deterministic.payload);
+        }
         appendTrace(childActive.generation, executionId,
             childTransition.id, "returning from subflow");
         emit(GameFlowEventKind::SubflowReturned,
@@ -752,7 +1286,7 @@ public:
 
             const auto* definition = registry->findAction(action.action);
             const auto* handler = registry->findActionHandler(action.action);
-            if (definition == nullptr || handler == nullptr) {
+            if (definition == nullptr) {
                 emitActiveAction(frame, GameFlowEventKind::ActionFailed,
                     GameFlowEventReason::MissingHandler, frames.size() - 1u);
                 finishTop(GameFlowActionState::Failed,
@@ -766,34 +1300,71 @@ public:
             active.activeActionExecution = executionId;
             GameFlowActionResult result;
             GameFlowEventReason resultReason = GameFlowEventReason::None;
-            try {
-                const auto& intent = frame.plan->document.intents[
-                    active.request.intentIndex];
-                const GameFlowActionInvocation invocation{
-                    active.generation,
-                    executionId,
-                    frame.plan->document.id,
-                    transition.id,
-                    intent.id,
-                    &active.request.payload,
-                    &action.arguments,
-                    &frame.parameters,
-                    &frame.lastSubflowResult,
-                    frame.returnedFlowId,
-                };
-                emitActiveAction(frame, GameFlowEventKind::ActionStarted,
-                    GameFlowEventReason::None, frames.size() - 1u);
-                appendTrace(active.generation, executionId, transition.id,
-                    "starting action '" + action.action + "'");
-                result = (*handler)(invocation);
-            } catch (const std::exception& exception) {
-                resultReason = GameFlowEventReason::HandlerException;
-                result = GameFlowActionResult::failed(
-                    std::string("action threw: ") + exception.what());
-            } catch (...) {
-                resultReason = GameFlowEventReason::HandlerException;
-                result = GameFlowActionResult::failed(
-                    "action threw an unknown exception");
+            const auto& intent = frame.plan->document.intents[
+                active.request.intentIndex];
+            emitActiveAction(frame, GameFlowEventKind::ActionStarted,
+                GameFlowEventReason::None, frames.size() - 1u);
+            appendTrace(active.generation, executionId, transition.id,
+                "starting action '" + action.action + "'");
+
+            auto deterministic = record(
+                GameFlowDeterminismKind::ActionOutcome,
+                frames.size() - 1u);
+            deterministic.generation = active.generation;
+            deterministic.actionExecutionId = executionId;
+            deterministic.transitionId = transition.id;
+            deterministic.intentId = intent.id;
+            deterministic.actionId = action.action;
+            if (determinism != nullptr
+                && determinism->mode() == GameFlowDeterminismMode::Playback) {
+                if (!exchange(deterministic,
+                        GameFlowDeterminismIntentOrigin::ActionCallback)) {
+                    return;
+                }
+                const auto recordedState = actionState(deterministic.outcome);
+                if (!recordedState.has_value()) {
+                    retainDeterminismFault(
+                        "GameFlow playback supplied an invalid action outcome.");
+                    return;
+                }
+                result.state = *recordedState;
+            } else {
+                if (handler == nullptr) {
+                    resultReason = GameFlowEventReason::MissingHandler;
+                    result = GameFlowActionResult::failed(
+                        "registered action handler is unavailable");
+                } else {
+                    try {
+                        const GameFlowActionInvocation invocation{
+                            active.generation,
+                            executionId,
+                            frame.plan->document.id,
+                            transition.id,
+                            intent.id,
+                            &active.request.payload,
+                            &action.arguments,
+                            &frame.parameters,
+                            &frame.lastSubflowResult,
+                            frame.returnedFlowId,
+                        };
+                        ExternalCallbackScope callback(*this,
+                            GameFlowDeterminismIntentOrigin::ActionCallback);
+                        result = (*handler)(invocation);
+                    } catch (const std::exception& exception) {
+                        resultReason = GameFlowEventReason::HandlerException;
+                        result = GameFlowActionResult::failed(
+                            std::string("action threw: ") + exception.what());
+                    } catch (...) {
+                        resultReason = GameFlowEventReason::HandlerException;
+                        result = GameFlowActionResult::failed(
+                            "action threw an unknown exception");
+                    }
+                }
+                deterministic.outcome = determinismOutcome(result.state);
+                if (!exchange(deterministic,
+                        GameFlowDeterminismIntentOrigin::ActionCallback)) {
+                    return;
+                }
             }
 
             if (result.state == GameFlowActionState::Pending) {
@@ -911,6 +1482,7 @@ bool GameFlowCoordinator::setPlan(
     std::string* error)
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (!_impl->mutationAllowed(error)) return false;
     reset();
     if (plan == nullptr || registry == nullptr) {
         _impl->emit(GameFlowEventKind::ConfigurationRejected,
@@ -933,6 +1505,25 @@ bool GameFlowCoordinator::setPlan(
         if (error != nullptr) *error = "GameFlow plan has no valid initial state.";
         return false;
     }
+    const std::size_t resolvedInitial = _impl->resolveInitial(
+        *plan, initial->second);
+    if (resolvedInitial == kNoState) {
+        _impl->emit(GameFlowEventKind::ConfigurationRejected,
+            GameFlowEventReason::InvalidConfiguration);
+        if (error != nullptr) {
+            *error = "GameFlow plan has no valid resolved initial state.";
+        }
+        return false;
+    }
+    GameFlowDeterminismRecord manifest;
+    manifest.kind = GameFlowDeterminismKind::ProgramManifest;
+    manifest.flowId = plan->document.id;
+    manifest.stateId = plan->document.states[resolvedInitial].id;
+    manifest.programFingerprint = gameFlowPlanFingerprint(*plan);
+    if (!_impl->exchange(manifest)) {
+        if (error != nullptr) *error = _impl->determinismFault;
+        return false;
+    }
     _impl->legacyPlan = plan;
     _impl->registry = registry;
     _impl->frames.push_back(_impl->makeFrame(plan, {}));
@@ -949,6 +1540,7 @@ bool GameFlowCoordinator::setProgram(
     std::string* error)
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (!_impl->mutationAllowed(error)) return false;
     reset();
     if (program == nullptr || registry == nullptr) {
         _impl->emit(GameFlowEventKind::ConfigurationRejected,
@@ -973,11 +1565,10 @@ bool GameFlowCoordinator::setProgram(
         if (error != nullptr) *error = std::move(localError);
         return false;
     }
-    _impl->program = program;
-    _impl->registry = registry;
-    _impl->frames.push_back(_impl->makeFrame(root, std::move(rootParameters)));
-    if (_impl->frames.back().currentStateIndex == kNoState) {
-        reset();
+    const auto initial = root->stateIndices.find(root->document.initialState);
+    const std::size_t resolvedInitial = initial == root->stateIndices.end()
+        ? kNoState : _impl->resolveInitial(*root, initial->second);
+    if (resolvedInitial == kNoState) {
         _impl->emit(GameFlowEventKind::ConfigurationRejected,
             GameFlowEventReason::InvalidConfiguration);
         if (error != nullptr) {
@@ -985,6 +1576,19 @@ bool GameFlowCoordinator::setProgram(
         }
         return false;
     }
+    GameFlowDeterminismRecord manifest;
+    manifest.kind = GameFlowDeterminismKind::ProgramManifest;
+    manifest.flowId = root->document.id;
+    manifest.stateId = root->document.states[resolvedInitial].id;
+    manifest.programFingerprint = gameFlowProgramFingerprint(*program);
+    manifest.payload = rootParameters;
+    if (!_impl->exchange(manifest)) {
+        if (error != nullptr) *error = _impl->determinismFault;
+        return false;
+    }
+    _impl->program = program;
+    _impl->registry = registry;
+    _impl->frames.push_back(_impl->makeFrame(root, std::move(rootParameters)));
     _impl->emit(GameFlowEventKind::ProgramInitialized);
     _impl->appendTrace(0, 0, {}, "program initialized");
     if (error != nullptr) error->clear();
@@ -998,6 +1602,7 @@ bool GameFlowCoordinator::replaceProgram(
     std::string* error)
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (!_impl->mutationAllowed(error)) return false;
     if (!reloadSafePoint()) {
         _impl->emit(GameFlowEventKind::ConfigurationRejected,
             GameFlowEventReason::UnsafeReloadPoint);
@@ -1030,8 +1635,10 @@ bool GameFlowCoordinator::replaceProgram(
 
     const std::string previousFlow = std::string(currentFlow());
     const std::string previousState = std::string(currentState());
-    Impl::Frame candidate = _impl->makeFrame(root, std::move(rootParameters));
-    if (candidate.currentStateIndex == kNoState) {
+    const auto initial = root->stateIndices.find(root->document.initialState);
+    std::size_t candidateState = initial == root->stateIndices.end()
+        ? kNoState : _impl->resolveInitial(*root, initial->second);
+    if (candidateState == kNoState) {
         _impl->emit(GameFlowEventKind::ConfigurationRejected,
             GameFlowEventReason::InvalidConfiguration);
         if (error != nullptr) {
@@ -1044,11 +1651,24 @@ bool GameFlowCoordinator::replaceProgram(
     if (root->document.id == previousFlow) {
         const auto state = root->stateIndices.find(previousState);
         if (state != root->stateIndices.end()) {
-            candidate.currentStateIndex = _impl->resolveInitial(
-                *root, state->second);
-            preserved = candidate.currentStateIndex != kNoState;
+            candidateState = _impl->resolveInitial(*root, state->second);
+            preserved = candidateState != kNoState;
         }
     }
+
+    GameFlowDeterminismRecord manifest;
+    manifest.kind = GameFlowDeterminismKind::ProgramManifest;
+    manifest.flowId = root->document.id;
+    manifest.stateId = root->document.states[candidateState].id;
+    manifest.programFingerprint = gameFlowProgramFingerprint(*program);
+    manifest.payload = rootParameters;
+    if (!_impl->exchange(manifest)) {
+        if (error != nullptr) *error = _impl->determinismFault;
+        return false;
+    }
+    Impl::Frame candidate = _impl->makeFrame(
+        root, std::move(rootParameters));
+    candidate.currentStateIndex = candidateState;
 
     _impl->program = program;
     _impl->legacyPlan = nullptr;
@@ -1066,8 +1686,10 @@ bool GameFlowCoordinator::replaceProgram(
 void GameFlowCoordinator::reset() noexcept
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (!_impl->mutationAllowed()) return;
     const bool wasReady = !_impl->frames.empty();
     _impl->cancelFramesFrom(0u, GameFlowEventReason::RuntimeReset);
+    if (_impl->determinismFaulted) return;
     if (wasReady) _impl->emit(GameFlowEventKind::CoordinatorReset);
     _impl->frames.clear();
     _impl->program = nullptr;
@@ -1080,6 +1702,17 @@ GameFlowRequestResult GameFlowCoordinator::request(
     GameFlowPayload payload)
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (_impl->callbackOrigin
+        == GameFlowDeterminismIntentOrigin::DeterminismExchange) {
+        return {GameFlowRequestState::NotReady,
+            "GameFlow request() cannot reenter its determinism exchange."};
+    }
+    if (_impl->determinismFaulted) {
+        return {GameFlowRequestState::DeterminismFault,
+            std::string(_impl->determinismFault.empty()
+                ? "GameFlow determinism exchange failed."
+                : _impl->determinismFault)};
+    }
     if (_impl->frames.empty() || _impl->registry == nullptr) {
         _impl->emit(GameFlowEventKind::IntentRejected,
             GameFlowEventReason::NotReady);
@@ -1103,6 +1736,22 @@ GameFlowRequestResult GameFlowCoordinator::request(
             frame.plan->document.intents[found->second].id);
         return {GameFlowRequestState::InvalidPayload, std::move(error)};
     }
+    auto deterministic = _impl->record(GameFlowDeterminismKind::Intent,
+        _impl->frames.size() - 1u);
+    deterministic.intentId = frame.plan->document.intents[found->second].id;
+    deterministic.payload = payload;
+    deterministic.intentOrigin = _impl->callbackOrigin;
+    if (!_impl->exchange(deterministic)) {
+        return {GameFlowRequestState::DeterminismFault,
+            std::string(_impl->determinismFault.empty()
+                ? "GameFlow determinism exchange failed."
+                : _impl->determinismFault)};
+    }
+    if (_impl->determinism != nullptr
+        && _impl->determinism->mode()
+            == GameFlowDeterminismMode::Playback) {
+        payload = std::move(deterministic.payload);
+    }
     frame.requests.push_back({found->second, std::move(payload)});
     _impl->emit(GameFlowEventKind::IntentQueued,
         GameFlowEventReason::None, 0, 0, {},
@@ -1113,9 +1762,19 @@ GameFlowRequestResult GameFlowCoordinator::request(
 void GameFlowCoordinator::update(double deltaSeconds)
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (!_impl->mutationAllowed()) return;
     if (!std::isfinite(deltaSeconds) || deltaSeconds < 0.0) deltaSeconds = 0.0;
-    Impl::UpdateTimingScope timing(*_impl, deltaSeconds);
     if (_impl->frames.empty()) return;
+    auto deterministic = _impl->record(GameFlowDeterminismKind::Update,
+        _impl->frames.size() - 1u);
+    deterministic.deltaSeconds = deltaSeconds;
+    if (!_impl->exchange(deterministic)) return;
+    if (_impl->determinism != nullptr
+        && _impl->determinism->mode()
+            == GameFlowDeterminismMode::Playback) {
+        deltaSeconds = deterministic.deltaSeconds;
+    }
+    Impl::UpdateTimingScope timing(*_impl, deltaSeconds);
     Impl::DispatchScope dispatch(_impl->dispatchDepth);
 
     std::size_t expired = kNoState;
@@ -1133,6 +1792,7 @@ void GameFlowCoordinator::update(double deltaSeconds)
     }
     if (expired != kNoState) {
         _impl->cancelFramesFrom(expired, GameFlowEventReason::Timeout);
+        if (_impl->determinismFaulted) return;
         _impl->frames.resize(expired + 1u);
         _impl->finishTop(GameFlowActionState::Failed,
             "transition timed out", GameFlowEventReason::Timeout);
@@ -1144,9 +1804,10 @@ void GameFlowCoordinator::update(double deltaSeconds)
            && !_impl->frames.back().requests.empty()
            && safetyCounter++ < 1024u) {
         auto& frame = _impl->frames.back();
-        auto request = std::move(frame.requests.front());
-        frame.requests.pop_front();
+        auto request = frame.requests.front();
         const auto selected = _impl->selectTransition(frame, request);
+        if (_impl->determinismFaulted) return;
+        frame.requests.pop_front();
         if (!selected.has_value()) {
             const auto& intent = frame.plan->document.intents[
                 request.intentIndex];
@@ -1167,6 +1828,7 @@ bool GameFlowCoordinator::completeAction(
     std::string* error)
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (!_impl->mutationAllowed(error)) return false;
     if (_impl->frames.empty()
         || !_impl->frames.back().active.has_value()
         || _impl->frames.back().active->pendingAction == 0
@@ -1184,6 +1846,43 @@ bool GameFlowCoordinator::completeAction(
         if (error != nullptr) *error = "A completion result cannot remain Pending.";
         return false;
     }
+    auto& frame = _impl->frames.back();
+    const auto& active = *frame.active;
+    const auto& normalized = frame.plan->transitions[active.transitionIndex];
+    const auto& transition = frame.plan->document.transitions[
+        normalized.documentIndex];
+    auto deterministic = _impl->record(
+        GameFlowDeterminismKind::AsyncCompletion,
+        _impl->frames.size() - 1u);
+    deterministic.generation = active.generation;
+    deterministic.actionExecutionId = executionId;
+    deterministic.transitionId = transition.id;
+    deterministic.intentId = frame.plan->document.intents[
+        active.request.intentIndex].id;
+    if (active.activeActionIndex < transition.actions.size()) {
+        deterministic.actionId = transition.actions[
+            active.activeActionIndex].action;
+    }
+    deterministic.outcome = determinismOutcome(result.state);
+    if (!_impl->exchange(deterministic)) {
+        if (error != nullptr) *error = determinismFault();
+        return false;
+    }
+    if (_impl->determinism != nullptr
+        && _impl->determinism->mode()
+            == GameFlowDeterminismMode::Playback) {
+        const auto recorded = actionState(deterministic.outcome);
+        if (!recorded.has_value()
+            || *recorded == GameFlowActionState::Pending) {
+            _impl->retainDeterminismFault(
+                "GameFlow playback supplied an invalid async completion.");
+            if (error != nullptr) *error = determinismFault();
+            return false;
+        }
+        result.state = *recorded;
+        result.message.clear();
+        result.onCancel = {};
+    }
     if (error != nullptr) error->clear();
     _impl->acceptActionResult(std::move(result));
     return true;
@@ -1192,11 +1891,28 @@ bool GameFlowCoordinator::completeAction(
 bool GameFlowCoordinator::cancelActive(std::string message)
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (!_impl->mutationAllowed()) return false;
     if (_impl->frames.empty()
         || !_impl->frames.back().active.has_value()) return false;
+    auto& frame = _impl->frames.back();
+    const auto& active = *frame.active;
+    const auto& transition = frame.plan->document.transitions[
+        frame.plan->transitions[active.transitionIndex].documentIndex];
+    auto deterministic = _impl->record(
+        GameFlowDeterminismKind::Cancellation,
+        _impl->frames.size() - 1u);
+    deterministic.cancellation =
+        GameFlowDeterminismCancellation::ActiveTransition;
+    deterministic.generation = active.generation;
+    deterministic.actionExecutionId = active.pendingAction;
+    deterministic.transitionId = transition.id;
+    deterministic.intentId = frame.plan->document.intents[
+        active.request.intentIndex].id;
+    if (!_impl->exchange(deterministic)) return false;
     _impl->invokeCancellation(_impl->frames.back(),
         _impl->frames.size() - 1u,
         GameFlowEventReason::ExplicitCancellation);
+    if (_impl->determinismFaulted) return false;
     _impl->finishTop(GameFlowActionState::Cancelled, std::move(message),
         GameFlowEventReason::ExplicitCancellation);
     return true;
@@ -1205,9 +1921,28 @@ bool GameFlowCoordinator::cancelActive(std::string message)
 bool GameFlowCoordinator::cancelSubflowCall(std::string message)
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (!_impl->mutationAllowed()) return false;
     if (_impl->frames.size() <= 1u) return false;
+    const auto& child = _impl->frames.back();
+    auto deterministic = _impl->record(
+        GameFlowDeterminismKind::Cancellation,
+        _impl->frames.size() - 1u);
+    deterministic.cancellation = GameFlowDeterminismCancellation::SubflowCall;
+    deterministic.targetFlowId = child.plan->document.id;
+    if (child.active.has_value()) {
+        const auto& active = *child.active;
+        const auto& transition = child.plan->document.transitions[
+            child.plan->transitions[active.transitionIndex].documentIndex];
+        deterministic.generation = active.generation;
+        deterministic.actionExecutionId = active.pendingAction;
+        deterministic.transitionId = transition.id;
+        deterministic.intentId = child.plan->document.intents[
+            active.request.intentIndex].id;
+    }
+    if (!_impl->exchange(deterministic)) return false;
     const std::size_t childIndex = _impl->frames.size() - 1u;
     _impl->cancelFramesFrom(childIndex);
+    if (_impl->determinismFaulted) return false;
     _impl->frames.resize(childIndex);
     if (!_impl->frames.back().active.has_value()
         || !_impl->frames.back().active->waitingForSubflow) return false;
@@ -1291,6 +2026,7 @@ bool GameFlowCoordinator::restoreState(
     std::string* error)
 {
     Impl::PublicCallScope publicCall(*_impl);
+    if (!_impl->mutationAllowed(error)) return false;
     if (!reloadSafePoint()) {
         _impl->emit(GameFlowEventKind::ConfigurationRejected,
             GameFlowEventReason::UnsafeReloadPoint);
@@ -1434,7 +2170,23 @@ void GameFlowCoordinator::resetMetrics() noexcept
 void GameFlowCoordinator::setEventObserver(
     GameFlowEventObserver observer) noexcept
 {
-    _impl->diagnostics.setObserver(std::move(observer));
+    if (_impl->externalCallbackDepth != 0u) return;
+    if (!observer) {
+        _impl->diagnostics.setObserver({});
+        return;
+    }
+    try {
+        Impl* owner = _impl.get();
+        _impl->diagnostics.setObserver(
+            [owner, callback = std::move(observer)](
+                const GameFlowEvent& event) {
+                Impl::ExternalCallbackScope scope(*owner,
+                    GameFlowDeterminismIntentOrigin::ObserverCallback);
+                callback(event);
+            });
+    } catch (...) {
+        _impl->diagnostics.setObserver({});
+    }
 }
 
 GameFlowDiagnosticsSnapshot GameFlowCoordinator::diagnosticsSnapshot() const
@@ -1461,6 +2213,74 @@ GameFlowDiagnosticsSnapshot GameFlowCoordinator::diagnosticsSnapshot() const
             frame.stateId, frame.suspendedTransitionId});
     }
     return _impl->diagnostics.snapshot(std::move(runtime));
+}
+
+bool GameFlowCoordinator::setDeterminismExchange(
+    IGameFlowDeterminismExchange* exchange,
+    std::string* error)
+{
+    Impl::PublicCallScope publicCall(*_impl);
+    if (_impl->externalCallbackDepth != 0u) {
+        if (error != nullptr) {
+            *error = "GameFlow determinism exchange cannot be changed from "
+                "a callback.";
+        }
+        return false;
+    }
+    if (_impl->determinismFaulted) {
+        // A faulted stream may be explicitly detached so reset() can recover.
+        if (exchange != nullptr) {
+            if (error != nullptr) {
+                *error = "Detach the faulted GameFlow determinism exchange "
+                    "before attaching another one.";
+            }
+            return false;
+        }
+    } else if (!_impl->frames.empty() && !reloadSafePoint()) {
+        if (error != nullptr) {
+            *error = "GameFlow determinism exchange can only change at a "
+                "reload safe point.";
+        }
+        return false;
+    }
+    if (exchange != nullptr && !exchange->healthy()) {
+        if (error != nullptr) {
+            *error = exchange->fault().empty()
+                ? "GameFlow determinism exchange is faulted."
+                : std::string(exchange->fault());
+        }
+        return false;
+    }
+    _impl->determinism = exchange;
+    _impl->nextDeterminismSequence = 1u;
+    _impl->bufferedPlaybackRecord.reset();
+    _impl->determinismFaulted = false;
+    _impl->determinismFault.clear();
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+IGameFlowDeterminismExchange*
+GameFlowCoordinator::determinismExchange() const noexcept
+{
+    return _impl->determinism;
+}
+
+bool GameFlowCoordinator::determinismHealthy() const noexcept
+{
+    return !_impl->determinismFaulted
+        && (_impl->determinism == nullptr || _impl->determinism->healthy());
+}
+
+std::string_view GameFlowCoordinator::determinismFault() const noexcept
+{
+    if (_impl->determinismFaulted) {
+        return _impl->determinismFault.empty()
+            ? std::string_view("GameFlow determinism exchange failed.")
+            : std::string_view(_impl->determinismFault);
+    }
+    return _impl->determinism == nullptr
+        ? std::string_view{} : _impl->determinism->fault();
 }
 
 } // namespace ayt::app

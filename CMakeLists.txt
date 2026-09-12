@@ -172,12 +172,14 @@ find_package(nlohmann_json CONFIG REQUIRED)
 add_library(AYApplicationGameFlow STATIC
     gameflow/src/AYGameFlowActionRegistry.cpp
     gameflow/src/AYGameFlowCoordinator.cpp
+    gameflow/src/AYGameFlowDeterminism.cpp
     gameflow/src/AYGameFlowDiagnostics.cpp
     gameflow/src/AYGameFlowDocument.cpp
     gameflow/src/AYGameFlowMigration.cpp
     gameflow/src/AYGameFlowProgram.cpp
     gameflow/include/AYApplication/GameFlowActionRegistry.h
     gameflow/include/AYApplication/GameFlowCoordinator.h
+    gameflow/include/AYApplication/GameFlowDeterminism.h
     gameflow/include/AYApplication/GameFlowDiagnostics.h
     gameflow/include/AYApplication/GameFlowDocument.h
     gameflow/include/AYApplication/GameFlowMigration.h
@@ -196,6 +198,32 @@ target_compile_options(AYApplicationGameFlow PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )
+
+# Optional persistence adapter. The core above exposes only a typed exchange
+# port and therefore never gains an AYReplay dependency.
+if(TARGET AYReplay)
+    add_library(AYApplicationGameFlowReplay STATIC
+        gameflow/replay/src/AYGameFlowReplayExchange.cpp
+        gameflow/replay/include/AYApplication/GameFlowReplayExchange.h
+        AYApplicationGameFlowReplay.h
+    )
+    target_include_directories(AYApplicationGameFlowReplay PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/gameflow/replay/include
+    )
+    target_link_libraries(AYApplicationGameFlowReplay PUBLIC
+        AYApplicationGameFlow
+        AYReplay
+    )
+    target_link_libraries(AYApplicationGameFlowReplay PRIVATE
+        nlohmann_json::nlohmann_json
+    )
+    target_compile_features(AYApplicationGameFlowReplay PUBLIC cxx_std_23)
+    target_compile_options(AYApplicationGameFlowReplay PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+    )
+endif()
 
 # Optional World lifecycle binding. The core target above remains unaware of
 # Scene and Host types; applications opt into this adapter explicitly.
@@ -260,6 +288,7 @@ if(BUILD_TESTING)
         unittest/TestMain.cpp
         unittest/Test_GameFlow.cpp
         unittest/Test_GameFlowDiagnostics.cpp
+        unittest/Test_GameFlowDeterminism.cpp
         unittest/Test_GameFlowSubflow.cpp
     )
     target_link_libraries(GameFlowCoreTest PRIVATE
@@ -273,6 +302,24 @@ if(BUILD_TESTING)
         $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
     )
     ay_add_test(GameFlowCoreTest LABELS "game-flow;headless;ayapplication")
+    if(TARGET AYApplicationGameFlowReplay)
+        add_executable(GameFlowReplayTest
+            unittest/TestMain.cpp
+            unittest/Test_GameFlowReplay.cpp
+        )
+        target_link_libraries(GameFlowReplayTest PRIVATE
+            AYApplicationGameFlowReplay
+            AYTest
+        )
+        target_compile_definitions(GameFlowReplayTest PRIVATE
+            "AY_APPLICATION_GAMEFLOW_REPLAY_OUTPUT_ROOT=\"${CMAKE_CURRENT_BINARY_DIR}/gameflow-replay-output\"")
+        target_compile_options(GameFlowReplayTest PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>: /W4>
+            $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+        )
+        ay_add_test(GameFlowReplayTest
+            LABELS "game-flow;replay;headless;ayapplication")
+    endif()
 
     add_executable(GameFlowWorldTest
         unittest/TestMain.cpp

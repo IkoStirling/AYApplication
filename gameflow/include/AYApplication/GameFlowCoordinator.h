@@ -2,6 +2,7 @@
 
 #include <AYApplication/GameFlowActionRegistry.h>
 #include <AYApplication/GameFlowDiagnostics.h>
+#include <AYApplication/GameFlowDeterminism.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -52,6 +53,7 @@ enum class GameFlowRequestState : std::uint8_t
     UnknownIntent,
     InvalidPayload,
     NotReady,
+    DeterminismFault,
 };
 
 struct GameFlowRequestResult
@@ -192,6 +194,17 @@ public:
     void resetMetrics() noexcept;
     void setEventObserver(GameFlowEventObserver observer) noexcept;
     [[nodiscard]] GameFlowDiagnosticsSnapshot diagnosticsSnapshot() const;
+
+    // The exchange is non-owning and must outlive the coordinator or the next
+    // call to setDeterminismExchange(). It can only be replaced at a reload
+    // safe point so one execution never mixes two deterministic streams.
+    bool setDeterminismExchange(
+        IGameFlowDeterminismExchange* exchange,
+        std::string* error = nullptr);
+    [[nodiscard]] IGameFlowDeterminismExchange* determinismExchange()
+        const noexcept;
+    [[nodiscard]] bool determinismHealthy() const noexcept;
+    [[nodiscard]] std::string_view determinismFault() const noexcept;
 
 private:
     class Impl;
