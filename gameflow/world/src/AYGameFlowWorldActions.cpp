@@ -141,22 +141,8 @@ bool GameFlowWorldActionAdapter::install(std::string* error)
         return true;
     }
 
-    const auto* existing = _impl->registry.findAction(
-        kGameFlowActionWorldReplace);
-    if (existing != nullptr && !compatibleWorldReplaceType(*existing)) {
-        if (error != nullptr) {
-            *error = "Existing world.replace action type is incompatible.";
-        }
+    if (!registerGameFlowWorldActionType(_impl->registry, error)) {
         return false;
-    }
-    if (existing == nullptr) {
-        GameFlowActionTypeDefinition definition;
-        definition.id = std::string(kGameFlowActionWorldReplace);
-        definition.arguments = {{
-            "worldId", GameFlowValueType::String, true, {}}};
-        definition.asynchronous = true;
-        if (!_impl->registry.registerActionType(
-                std::move(definition), false, error)) return false;
     }
 
     if (const auto* handler = _impl->registry.findActionHandler(
@@ -291,6 +277,31 @@ bool GameFlowWorldActionAdapter::installed() const noexcept
     return _impl != nullptr && _impl->state->installed;
 }
 
+bool registerGameFlowWorldActionType(
+    GameFlowActionRegistry& registry,
+    std::string* error)
+{
+    const auto* existing = registry.findAction(kGameFlowActionWorldReplace);
+    if (existing != nullptr) {
+        if (compatibleWorldReplaceType(*existing)) {
+            if (error != nullptr) error->clear();
+            return true;
+        }
+        if (error != nullptr) {
+            *error = "Existing world.replace action type is incompatible.";
+        }
+        return false;
+    }
+
+    GameFlowActionTypeDefinition definition;
+    definition.id = std::string(kGameFlowActionWorldReplace);
+    definition.arguments = {{
+        "worldId", GameFlowValueType::String, true, {}}};
+    definition.asynchronous = true;
+    return registry.registerActionType(
+        std::move(definition), false, error);
+}
+
 std::uint64_t GameFlowWorldActionAdapter::pendingSceneRequestId() const noexcept
 {
     return _impl != nullptr && _impl->state->pending.has_value()
@@ -304,9 +315,19 @@ createGameFlowWorldActionAdapter(
     GameFlowCoordinator& coordinator,
     std::string* error)
 {
-    IGameWorldRouter* router = gameWorldRouter(host);
-    auto* loader = host.service<IRuntimeSceneLoader>(
-        kHostServiceRuntimeSceneLoader);
+    IGameWorldRouter* router = nullptr;
+    IRuntimeSceneLoader* loader = nullptr;
+    try {
+        router = host.service<IGameWorldRouter>(
+            kHostServiceGameWorldRouter);
+        loader = host.service<IRuntimeSceneLoader>(
+            kHostServiceRuntimeSceneLoader);
+    } catch (...) {
+        if (error != nullptr) {
+            *error = "EngineHost rejected GameFlow service lookup.";
+        }
+        return nullptr;
+    }
     if (router == nullptr || loader == nullptr) {
         if (error != nullptr) {
             *error = router == nullptr

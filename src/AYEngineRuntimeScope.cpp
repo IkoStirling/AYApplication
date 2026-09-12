@@ -17,7 +17,7 @@ namespace ayt::app
 namespace
 {
 
-constexpr std::array<std::string_view, 7> kBuiltinServiceKeys{
+constexpr std::array<std::string_view, 8> kBuiltinServiceKeys{
     kHostServiceResources,
     kHostServicePhysics,
     kHostServicePhysicsQuery,
@@ -25,6 +25,7 @@ constexpr std::array<std::string_view, 7> kBuiltinServiceKeys{
     kHostServiceScenes,
     kHostServiceRuntimeSceneLoader,
     kHostServiceGameWorldRouter,
+    kHostServiceGameFlowRuntime,
 };
 
 } // namespace

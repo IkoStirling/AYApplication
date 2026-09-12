@@ -51,6 +51,8 @@ inline constexpr const char* kHostServiceRuntimeSceneLoader =
     "ayt.app.RuntimeSceneLoader";
 inline constexpr const char* kHostServiceGameWorldRouter =
     "ayt.app.GameWorldRouter";
+inline constexpr const char* kHostServiceGameFlowRuntime =
+    "ayt.app.GameFlowRuntime";
 inline constexpr const char* kHostServiceUIFlowRuntime =
     "ayt.app.UIFlowRuntime";
 inline constexpr const char* kHostServiceUIFlowSceneBridge =

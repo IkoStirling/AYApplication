@@ -78,6 +78,8 @@ struct AppCommandLine {
     std::string userDataPath;
     /// `-scene <path>` — Client startup `.ayscene`.
     std::string scenePath;
+    /// `-flow <path>` — startup `.gameflow.json`; overrides project flow.
+    std::string flowPath;
 
     // 未知参数（保留给子系统）
     std::vector<std::string> unknownArgs;

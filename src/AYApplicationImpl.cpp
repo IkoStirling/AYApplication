@@ -131,6 +131,8 @@ AppCommandLine parseArguments(std::vector<std::string> args)
             cmd.userDataPath = cmd.args[++i];
         } else if (arg == "-scene" && i + 1u < cmd.args.size()) {
             cmd.scenePath = cmd.args[++i];
+        } else if (arg == "-flow" && i + 1u < cmd.args.size()) {
+            cmd.flowPath = cmd.args[++i];
         } else {
             cmd.unknownArgs.push_back(cmd.args[i]);
         }
@@ -192,6 +194,7 @@ void AppCommandLine::printHelp(const char* appName) const
     std::printf("  -asset-root <path>     Set asset root directory\n");
     std::printf("  -user-data <path>      Set user data directory\n");
     std::printf("  -scene <path>          Load startup .ayscene (Client)\n");
+    std::printf("  -flow <path>           Load startup .gameflow.json\n");
     std::printf("  -server                Headless Server assembly (no Device/Audio/Renderer)\n");
     std::printf("  -no-audio              Disable audio system\n");
     std::printf("  -no-physics            Disable PhysicsSubSystem\n");

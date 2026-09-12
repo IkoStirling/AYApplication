@@ -2,6 +2,8 @@
 
 #include <AYApplication/EngineModuleContext.h>
 #include <AYApplication/EngineModuleRuntime.h>
+#include <AYApplication/GameFlowRuntimeModule.h>
+#include <AYApplication/GameFlowWorldActions.h>
 #include <AYApplication/IEngineHost.h>
 #include <AYApplication/RuntimeSceneLoader.h>
 #include <AYApplication/RuntimeSceneLoaderModule.h>
@@ -78,6 +80,12 @@ public:
                 ? "Startup World load failed"
                 : startupStatus.message;
             return false;
+        }
+
+        if (_startupWorld.empty()) {
+            _currentWorld.clear();
+            _lastError.clear();
+            return true;
         }
 
         const GameWorld* startup = findWorld(_startupWorld);
@@ -256,7 +264,7 @@ public:
     {
         try {
             if (_host.findService(kHostServiceGameWorldRouter) ==
-                dynamic_cast<IGameWorldRouter*>(installedSubSystem())) {
+                static_cast<void*>(installedSubSystem())) {
                 _host.provideService(kHostServiceGameWorldRouter, nullptr);
             }
         } catch (...) {
@@ -283,6 +291,17 @@ std::vector<GameWorld> resolveWorldPaths(
     return resolved;
 }
 
+std::string resolveAssetPath(
+    std::string pathValue,
+    std::string_view assetRoot)
+{
+    std::filesystem::path path(std::move(pathValue));
+    if (path.is_relative() && !assetRoot.empty()) {
+        path = std::filesystem::path(assetRoot) / path;
+    }
+    return path.lexically_normal().string();
+}
+
 const GameWorld* findWorld(
     const std::vector<GameWorld>& worlds,
     std::string_view id) noexcept
@@ -293,6 +312,34 @@ const GameWorld* findWorld(
         }
     }
     return nullptr;
+}
+
+bool validateGameFlowWorldReferences(
+    const GameFlowDocument& document,
+    const std::vector<GameWorld>& worlds,
+    std::string& error)
+{
+    for (const auto& transition : document.transitions) {
+        for (std::size_t actionIndex = 0;
+             actionIndex < transition.actions.size();
+             ++actionIndex) {
+            const auto& action = transition.actions[actionIndex];
+            if (action.action != kGameFlowActionWorldReplace) continue;
+            const auto argument = action.arguments.find("worldId");
+            const auto* worldId = argument == action.arguments.end()
+                ? nullptr
+                : std::get_if<std::string>(&argument->second.data);
+            if (worldId == nullptr || findWorld(worlds, *worldId) == nullptr) {
+                error = "GameFlow transition '" + transition.id
+                    + "' action[" + std::to_string(actionIndex)
+                    + "] references an unknown World id: "
+                    + (worldId == nullptr ? std::string("<invalid>")
+                                          : *worldId);
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -313,15 +360,16 @@ bool validateGameProject(const GameProject& project, std::string& error)
         return false;
     }
     if (project.serverMode && project.worlds.empty() &&
-        project.startupWorld.empty()) {
+        project.startupWorld.empty() && project.startupFlow.empty()) {
         return true;
     }
-    if (project.worlds.empty()) {
+    if (!project.serverMode && project.worlds.empty()) {
         error = "A client game must declare at least one World";
         return false;
     }
-    if (project.startupWorld.empty()) {
-        error = "A client game must select startupWorld";
+    if (!project.serverMode && project.startupWorld.empty()
+        && project.startupFlow.empty()) {
+        error = "A client game must select startupFlow or startupWorld";
         return false;
     }
 
@@ -336,12 +384,68 @@ bool validateGameProject(const GameProject& project, std::string& error)
             return false;
         }
     }
-    if (findWorld(project.worlds, project.startupWorld) == nullptr) {
+    if (!project.startupWorld.empty()
+        && findWorld(project.worlds, project.startupWorld) == nullptr) {
         error = "startupWorld is not present in worlds: " +
                 project.startupWorld;
         return false;
     }
+    if (!project.startupFlow.empty()
+        && !std::filesystem::path(project.startupFlow).filename().string()
+            .ends_with(".gameflow.json")) {
+        error = "startupFlow must reference a .gameflow.json asset";
+        return false;
+    }
     return true;
+}
+
+bool resolveGameProjectStartup(
+    const GameProject& project,
+    const AppCommandLine& commandLine,
+    GameProjectStartupSelection& selection,
+    std::string& error)
+{
+    selection = {};
+    error.clear();
+    const bool serverMode = project.serverMode || commandLine.server;
+    const std::string_view assetRoot = commandLine.assetRoot.empty()
+        ? std::string_view(project.assetRoot)
+        : std::string_view(commandLine.assetRoot);
+
+    // Direct Scene launch is the strongest client debugging override and
+    // intentionally bypasses all GameFlow startup behavior.
+    if (!serverMode && !commandLine.scenePath.empty()) {
+        selection.source = GameProjectStartupSource::CommandLineScene;
+        selection.scenePath = commandLine.scenePath;
+        selection.worldId = "__command_line__";
+        return true;
+    }
+    if (!commandLine.flowPath.empty()) {
+        selection.source = GameProjectStartupSource::CommandLineFlow;
+        selection.flowPath = resolveAssetPath(
+            commandLine.flowPath, assetRoot);
+        return true;
+    }
+    if (!project.startupFlow.empty()) {
+        selection.source = GameProjectStartupSource::ProjectFlow;
+        selection.flowPath = resolveAssetPath(project.startupFlow, assetRoot);
+        return true;
+    }
+    if (serverMode) return true;
+    if (!project.startupWorld.empty()) {
+        const GameWorld* world = findWorld(project.worlds, project.startupWorld);
+        if (world == nullptr) {
+            error = "startupWorld is not present in worlds: "
+                + project.startupWorld;
+            return false;
+        }
+        selection.source = GameProjectStartupSource::ProjectWorld;
+        selection.worldId = world->id;
+        selection.scenePath = resolveAssetPath(world->scenePath, assetRoot);
+        return true;
+    }
+    error = "No startupFlow or startupWorld was selected";
+    return false;
 }
 
 IGameWorldRouter* gameWorldRouter(IEngineHost& host) noexcept
@@ -360,11 +464,6 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
     // before validation and before deciding whether to add the World router.
     project.serverMode = project.serverMode || commandLine.server;
 
-    std::string error;
-    if (!validateGameProject(project, error)) {
-        std::fprintf(stderr, "[GameProject] %s\n", error.c_str());
-        return static_cast<int>(AppException::Code::ConfigError);
-    }
     if (commandLine.help) {
         commandLine.printHelp(project.displayName.c_str());
         return 0;
@@ -378,20 +477,54 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
     if (!commandLine.assetRoot.empty()) {
         project.assetRoot = commandLine.assetRoot;
     }
-    project.worlds = resolveWorldPaths(project.worlds, project.assetRoot);
 
-    if (!commandLine.scenePath.empty() && !project.serverMode) {
+    GameProjectStartupSelection startup;
+    std::string error;
+    if (!resolveGameProjectStartup(project, commandLine, startup, error)) {
+        std::fprintf(stderr, "[GameProject] %s\n", error.c_str());
+        return static_cast<int>(AppException::Code::ConfigError);
+    }
+    if (startup.source == GameProjectStartupSource::CommandLineScene) {
         project.startupWorld = "__command_line__";
+        project.startupFlow.clear();
         project.worlds.push_back(GameWorld{
             .id = project.startupWorld,
-            .scenePath = commandLine.scenePath,
+            .scenePath = startup.scenePath,
             .sceneName = "CommandLineWorld",
         });
+    } else if (startup.source == GameProjectStartupSource::CommandLineFlow
+               || startup.source == GameProjectStartupSource::ProjectFlow) {
+        project.startupFlow = startup.flowPath;
     }
 
-    const GameWorld* startup = project.serverMode
-        ? nullptr
-        : findWorld(project.worlds, project.startupWorld);
+    if (!validateGameProject(project, error)) {
+        std::fprintf(stderr, "[GameProject] %s\n", error.c_str());
+        return static_cast<int>(AppException::Code::ConfigError);
+    }
+    project.worlds = resolveWorldPaths(project.worlds, project.assetRoot);
+
+    const bool usesGameFlow = !project.startupFlow.empty();
+    std::unique_ptr<GameFlowRuntimePreparation> preparedGameFlow;
+    if (usesGameFlow) {
+        GameFlowRuntimeConfig config;
+        config.documentPath = project.startupFlow;
+        config.configureRegistry = std::move(project.configureGameFlow);
+        config.enableWorldActions = !project.serverMode;
+        preparedGameFlow = prepareGameFlowRuntime(
+            std::move(config), &error);
+        if (!preparedGameFlow) {
+            std::fprintf(stderr, "[GameProject] %s\n", error.c_str());
+            return static_cast<int>(AppException::Code::ConfigError);
+        }
+        if (!project.serverMode
+            && !validateGameFlowWorldReferences(
+                preparedGameFlow->document(), project.worlds, error)) {
+            std::fprintf(stderr, "[GameProject] %s\n", error.c_str());
+            return static_cast<int>(AppException::Code::ConfigError);
+        }
+    }
+    const GameWorld* startupWorld = project.serverMode || usesGameFlow
+        ? nullptr : findWorld(project.worlds, project.startupWorld);
 
     GameDesc desc;
     desc.name = project.displayName.c_str();
@@ -401,31 +534,56 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
     desc.enableRenderThread = project.enableRenderThread;
     desc.assetRoot = project.assetRoot.c_str();
     desc.userDataPath = project.userDataPath.c_str();
-    desc.scenePath = startup == nullptr ? "" : startup->scenePath.c_str();
+    desc.scenePath = startupWorld == nullptr
+        ? "" : startupWorld->scenePath.c_str();
     desc.enablePresentation = project.enablePresentation;
     desc.enablePhysics = project.enablePhysics;
     desc.serverMode = project.serverMode;
 
     auto configureGameModules = project.configureModules;
+    auto preparedGameFlowSeed =
+        std::make_shared<std::unique_ptr<GameFlowRuntimePreparation>>(
+            std::move(preparedGameFlow));
     if (!project.serverMode) {
         auto worlds = project.worlds;
-        auto startupWorld = project.startupWorld;
+        auto routerStartupWorld = usesGameFlow
+            ? std::string{} : project.startupWorld;
         desc.configureModules = [
             worlds = std::move(worlds),
-            startupWorld = std::move(startupWorld),
+            routerStartupWorld = std::move(routerStartupWorld),
+            preparedGameFlowSeed,
             configureGameModules = std::move(configureGameModules)](
                 EngineModuleRuntime& runtime) mutable {
             auto result = runtime.modules().emplace<GameWorldRouterModule>(
                 runtime.context().host(),
                 std::move(worlds),
-                std::move(startupWorld));
-            if (!result || !configureGameModules) {
-                return result;
+                std::move(routerStartupWorld));
+            if (!result) return result;
+            if (*preparedGameFlowSeed) {
+                result = runtime.modules().emplace<GameFlowRuntimeModule>(
+                    runtime.context().host(),
+                    std::move(*preparedGameFlowSeed));
+                if (!result) return result;
             }
+            if (!configureGameModules) return result;
             return configureGameModules(runtime);
         };
     } else {
-        desc.configureModules = std::move(configureGameModules);
+        desc.configureModules = [
+            preparedGameFlowSeed,
+            configureGameModules = std::move(configureGameModules)](
+                EngineModuleRuntime& runtime) mutable {
+            ayt::module::ModuleResult result =
+                ayt::module::ModuleResult::success();
+            if (*preparedGameFlowSeed) {
+                result = runtime.modules().emplace<GameFlowRuntimeModule>(
+                    runtime.context().host(),
+                    std::move(*preparedGameFlowSeed));
+                if (!result) return result;
+            }
+            if (!configureGameModules) return result;
+            return configureGameModules(runtime);
+        };
     }
 
     try {

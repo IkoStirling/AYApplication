@@ -20,6 +20,7 @@ MyGame/
 │   ├── data/                   # 游戏数据结构与加载
 │   └── systems/                # 游戏 SubSystem / ECS system
 ├── Assets/
+│   ├── flow/                   # 应用级 .gameflow.json
 │   └── worlds/                 # .ayscene 文件
 ├── project.ayproject.json      # Editor/工具读取的项目、World 与运行清单
 └── tests/                      # 游戏规则和装配验证
@@ -77,7 +78,7 @@ ayt::app::GameProject makeGameProject()
     game.id = "my_game";
     game.displayName = "My Game";
     game.assetRoot = "Assets";
-    game.startupWorld = "main_menu";
+    game.startupFlow = "flow/application.gameflow.json";
     game.worlds = {
         {.id = "main_menu", .scenePath = "worlds/main_menu.ayscene"},
         {.id = "level_01", .scenePath = "worlds/level_01.ayscene"},
@@ -89,6 +90,61 @@ ayt::app::GameProject makeGameProject()
 
 `configureGameModules` 把游戏自己的 SubSystem 模块加入同一张依赖图。模块通过稳定
 ID 声明依赖；引擎在启动前统一检查缺失依赖和依赖环，再按拓扑顺序安装和关闭。
+
+`startupFlow` 是相对 `assetRoot` 的应用级流程入口。GameFlow 运行时由 GameLoop
+持有，因此替换 World 时不会被销毁。启动文档应声明 `app.start` intent；运行时完成
+初始化后会自动排队该 intent，首个 Ingress 更新再执行启动动作。最小启动流程如下：
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "application",
+  "initialState": "boot",
+  "intents": [
+    { "id": "app.start" }
+  ],
+  "states": [
+    { "id": "boot" },
+    { "id": "main_menu" },
+    { "id": "startup_error" }
+  ],
+  "transitions": [
+    {
+      "id": "open_main_menu",
+      "from": "boot",
+      "intent": "app.start",
+      "to": "main_menu",
+      "actions": [
+        { "id": "world.replace", "arguments": { "worldId": "main_menu" } }
+      ],
+      "onFailure": "startup_error"
+    }
+  ]
+}
+```
+
+`world.replace` 由客户端装配自动注册，并且只接受 `worlds` 清单里的稳定 ID。游戏
+自定义 action/guard 通过 `configureGameFlow` 注册；回调在流程文档归一化和校验前
+执行。声明自定义类型时包含 `AYApplicationGameFlow.h`，不要让 JSON 直接依赖 C++
+类名或 Scene 文件名。
+
+```cpp
+game.configureGameFlow = [](
+    ayt::app::GameFlowActionRegistry& registry,
+    std::string& error) {
+    return registry.registerAction(
+        {"save.load_slot",
+         {{"slot", ayt::app::GameFlowValueType::Integer, true, {}}},
+         false},
+        &loadSlotAction,
+        false,
+        &error);
+};
+```
+
+动作实现放在 `src/systems`，`game/MyGame.cpp` 只登记稳定 action ID、参数契约和
+处理器。这样以后增加编辑器节点图时，可以直接从同一份注册表生成节点端口和参数
+Inspector。
 
 平台入口保持很薄：
 
@@ -126,8 +182,20 @@ World 保存本关的实体、组件和临时状态。跨 World 仍需保留的�
 2. 在 `game/MyGame.cpp` 的 `worlds` 中登记稳定 ID 和相对路径。
 3. 从游戏系统调用 `requestWorld("stable_id")`。
 
-命令行 `-scene <path>` 可临时覆盖客户端启动 World；`-server` 选择无窗口的 Server
-装配。正式流程仍应使用项目内声明的稳定 World ID。
+启动入口按以下顺序选择：
+
+1. 客户端 `-scene <path>`：直接启动指定 Scene，绕过 GameFlow，适合关卡调试。
+2. `-flow <path>`：覆盖项目流程，路径相对当前有效的资产根目录。
+3. `GameProject::startupFlow`：正式应用流程入口。
+4. `GameProject::startupWorld`：旧项目的兼容启动路径。
+
+`-asset-root <path>` 同时覆盖 flow 和 World 相对路径的解析根目录。`-server` 选择
+无窗口的 Server 装配；Server 不使用 `-scene`，但可运行不含 `world.replace` 的
+GameFlow。正式流程应使用项目内声明的稳定 World ID。
+
+现有项目无需立即迁移：只设置 `startupWorld` 时行为保持不变。迁移时先新增包含
+`app.start -> world.replace(startupWorld)` 的流程文件，再设置 `startupFlow`；两者同时
+存在时优先使用 `startupFlow`，保留 `startupWorld` 可作为旧版本配置的兼容信息。
 
 ## Editor 项目清单
 
@@ -146,6 +214,7 @@ World 保存本关的实体、组件和临时状态。跨 World 仍需保留的�
     "gameAssembly": "game/MyGame.cpp",
     "gameCode": "src"
   },
+  "startupFlow": "flow/application.gameflow.json",
   "startupWorld": "main_menu",
   "worlds": [
     {

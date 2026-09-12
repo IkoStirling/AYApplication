@@ -194,23 +194,35 @@ target_compile_options(AYApplicationGameFlow PRIVATE
 # Optional World lifecycle binding. The core target above remains unaware of
 # Scene and Host types; applications opt into this adapter explicitly.
 add_library(AYApplicationGameFlowWorld STATIC
+    gameflow/world/src/AYGameFlowRuntime.cpp
+    gameflow/world/src/AYGameFlowRuntimeModule.cpp
     gameflow/world/src/AYGameFlowWorldActions.cpp
+    gameflow/world/include/AYApplication/GameFlowRuntime.h
+    gameflow/world/include/AYApplication/GameFlowRuntimeModule.h
     gameflow/world/include/AYApplication/GameFlowWorldActions.h
     AYApplicationGameFlowWorld.h
 )
 target_include_directories(AYApplicationGameFlowWorld PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/interface
     ${CMAKE_CURRENT_SOURCE_DIR}/gameflow/world/include
 )
 target_link_libraries(AYApplicationGameFlowWorld PUBLIC
     AYApplicationGameFlow
-    AYApplication
+    AYEventSystem
+    AYGameLoop
+    AY::Module
 )
 target_compile_features(AYApplicationGameFlowWorld PUBLIC cxx_std_23)
 target_compile_options(AYApplicationGameFlowWorld PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
 )
+
+# GameProject is the composition root for the optional startupFlow path. The
+# adapter target consumes only public Host interfaces, so this edge is acyclic.
+target_link_libraries(${PROJECT_NAME} PRIVATE AYApplicationGameFlowWorld)
 
 if(BUILD_TESTING)
     add_executable(GameFlowCoreTest
@@ -235,6 +247,7 @@ if(BUILD_TESTING)
     )
     target_link_libraries(GameFlowWorldTest PRIVATE
         AYApplicationGameFlowWorld
+        AYApplication
         AYScene
         AYTest
     )
@@ -244,6 +257,23 @@ if(BUILD_TESTING)
     )
     ay_add_test(GameFlowWorldTest
         LABELS "game-flow;world;headless;ayapplication")
+
+    add_executable(GameFlowRuntimeTest
+        unittest/TestMain.cpp
+        unittest/Test_GameFlowRuntime.cpp
+    )
+    target_link_libraries(GameFlowRuntimeTest PRIVATE
+        AYApplicationGameFlowWorld
+        AYTest
+    )
+    target_compile_definitions(GameFlowRuntimeTest PRIVATE
+        AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/unittest/assets")
+    target_compile_options(GameFlowRuntimeTest PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+    )
+    ay_add_test(GameFlowRuntimeTest
+        LABELS "game-flow;runtime;headless;ayapplication")
 endif()
 
 add_library(AYProjectContentValidationCore STATIC

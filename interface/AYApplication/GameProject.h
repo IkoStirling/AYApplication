@@ -18,6 +18,7 @@ namespace ayt::app
 {
 
 class EngineModuleRuntime;
+class GameFlowActionRegistry;
 class IEngineHost;
 
 inline constexpr std::string_view kGameWorldRouterModuleId =
@@ -64,6 +65,32 @@ struct GameProject
     /// GameWorldRouter node already exist when this callback runs.
     std::function<ayt::module::ModuleResult(EngineModuleRuntime&)>
         configureModules;
+
+    /// Preferred application-level startup orchestration asset. Relative
+    /// paths resolve below assetRoot. Empty preserves startupWorld behavior.
+    std::string startupFlow;
+
+    /// Register project-owned GameFlow actions and guards before the startup
+    /// document is validated. Return false with an actionable error on failure.
+    std::function<bool(GameFlowActionRegistry&, std::string&)>
+        configureGameFlow;
+};
+
+enum class GameProjectStartupSource : std::uint8_t
+{
+    None,
+    CommandLineScene,
+    CommandLineFlow,
+    ProjectFlow,
+    ProjectWorld,
+};
+
+struct GameProjectStartupSelection
+{
+    GameProjectStartupSource source = GameProjectStartupSource::None;
+    std::string worldId;
+    std::string scenePath;
+    std::string flowPath;
 };
 
 /// Narrow cross-World transition service. Game state that must survive a
@@ -85,6 +112,14 @@ public:
 /// engine state. Empty error means success.
 [[nodiscard]] bool validateGameProject(
     const GameProject& project,
+    std::string& error);
+
+/// Resolve startup precedence without starting the engine. The effective
+/// order is command-line override, project startupFlow, then startupWorld.
+[[nodiscard]] bool resolveGameProjectStartup(
+    const GameProject& project,
+    const AppCommandLine& commandLine,
+    GameProjectStartupSelection& selection,
     std::string& error);
 
 /// Resolve the router published by the running game application.

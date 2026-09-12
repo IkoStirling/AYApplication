@@ -19,6 +19,12 @@ class IRuntimeSceneLoader;
 inline constexpr std::string_view kGameFlowActionWorldReplace =
     "world.replace";
 
+// Registers only the stable authoring/runtime contract. This is safe for
+// preflight validation and editor metadata discovery without a live World.
+[[nodiscard]] bool registerGameFlowWorldActionType(
+    GameFlowActionRegistry& registry,
+    std::string* error = nullptr);
+
 // Optional adapter that binds the headless GameFlow contract to the existing
 // stable World router and RuntimeSceneLoader completion event. Every referenced
 // service and registry must outlive this adapter.

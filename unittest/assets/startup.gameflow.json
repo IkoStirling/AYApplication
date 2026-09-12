@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "runtime-startup",
+  "initialState": "boot",
+  "intents": [
+    { "id": "app.start" }
+  ],
+  "states": [
+    { "id": "boot" },
+    { "id": "ready" },
+    { "id": "startup_error" }
+  ],
+  "transitions": [
+    {
+      "id": "complete_startup",
+      "from": "boot",
+      "intent": "app.start",
+      "to": "ready",
+      "actions": [
+        { "id": "test.mark_started" }
+      ],
+      "onFailure": "startup_error"
+    }
+  ]
+}
