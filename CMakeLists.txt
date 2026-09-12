@@ -173,9 +173,11 @@ add_library(AYApplicationGameFlow STATIC
     gameflow/src/AYGameFlowActionRegistry.cpp
     gameflow/src/AYGameFlowCoordinator.cpp
     gameflow/src/AYGameFlowDocument.cpp
+    gameflow/src/AYGameFlowMigration.cpp
     gameflow/include/AYApplication/GameFlowActionRegistry.h
     gameflow/include/AYApplication/GameFlowCoordinator.h
     gameflow/include/AYApplication/GameFlowDocument.h
+    gameflow/include/AYApplication/GameFlowMigration.h
     AYApplicationGameFlow.h
 )
 target_include_directories(AYApplicationGameFlow PUBLIC

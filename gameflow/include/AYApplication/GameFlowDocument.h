@@ -11,7 +11,7 @@
 namespace ayt::app
 {
 
-inline constexpr std::uint32_t kGameFlowSchemaVersion = 1u;
+inline constexpr std::uint32_t kGameFlowSchemaVersion = 2u;
 
 enum class GameFlowValueType : std::uint8_t
 {
@@ -103,6 +103,13 @@ struct GameFlowDocument
     std::vector<GameFlowIntentDefinition> intents;
     std::vector<GameFlowStateDefinition> states;
     std::vector<GameFlowTransitionDefinition> transitions;
+    // Kept at the tail so existing aggregate initialization remains source
+    // compatible. Phase 6 subflows use these schemas for call input/result.
+    std::vector<GameFlowFieldDefinition> entryParameters;
+    std::vector<GameFlowFieldDefinition> result;
+    // Engine and project extensions must live under this explicit namespace;
+    // arbitrary unknown root keys are not part of the preservation contract.
+    GameFlowValue::Object extensions;
 
     [[nodiscard]] const GameFlowIntentDefinition* findIntent(
         std::string_view id) const noexcept;
@@ -124,6 +131,7 @@ struct GameFlowDiagnostic
 };
 
 class GameFlowActionRegistry;
+struct GameFlowMigrationReport;
 
 // Structural validation is shared by serialization, runtime normalization,
 // headless tooling, and the future editor. Supplying a registry additionally
@@ -140,6 +148,11 @@ public:
         std::string_view jsonText,
         GameFlowDocument& document,
         std::vector<GameFlowDiagnostic>* diagnostics = nullptr);
+    static bool deserialize(
+        std::string_view jsonText,
+        GameFlowDocument& document,
+        std::vector<GameFlowDiagnostic>* diagnostics,
+        GameFlowMigrationReport* migrationReport);
     static bool serialize(
         const GameFlowDocument& document,
         std::string& jsonText,

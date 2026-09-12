@@ -1,6 +1,7 @@
 #include <AYApplication/GameFlowActionRegistry.h>
 #include <AYApplication/GameFlowCoordinator.h>
 #include <AYApplication/GameFlowDocument.h>
+#include <AYApplication/GameFlowMigration.h>
 #include <AYTest.h>
 
 #include <filesystem>
@@ -85,9 +86,22 @@ TEST_SUITE(GameFlowDocumentTests)
 
 TEST_CASE(schema_v1_fixture_round_trips_without_losing_contract_data)
 {
-    const auto document = loadMainDocument();
-    std::string encoded;
+    GameFlowDocument document;
+    GameFlowMigrationReport migration;
     std::vector<GameFlowDiagnostic> diagnostics;
+    CHECK(GameFlowSerializer::deserialize(readFixture("main.gameflow.json"),
+        document, &diagnostics, &migration));
+    CHECK(migration.sourceVersion == 1u);
+    CHECK(migration.targetVersion == kGameFlowSchemaVersion);
+    CHECK(migration.changed);
+    CHECK(migration.steps.size() == 1u);
+    if (!migration.steps.empty()) {
+        CHECK(migration.steps[0].fromVersion == 1u);
+        CHECK(migration.steps[0].toVersion == 2u);
+    }
+    CHECK(document.schemaVersion == kGameFlowSchemaVersion);
+
+    std::string encoded;
     CHECK(GameFlowSerializer::serialize(document, encoded, &diagnostics));
     CHECK(diagnostics.empty());
 
@@ -102,6 +116,100 @@ TEST_CASE(schema_v1_fixture_round_trips_without_losing_contract_data)
     CHECK(decoded.transitions[1].onFailureState == "load_error");
     CHECK(decoded.intents[1].payload[0].defaultValue
         == GameFlowValue(std::int64_t{0}));
+}
+
+TEST_CASE(raw_schema_migration_is_idempotent_and_reports_each_step)
+{
+    GameFlowMigrationReport firstReport;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    std::string migrated;
+    CHECK(migrateGameFlowJson(readFixture("main.gameflow.json"), migrated,
+        &firstReport, &diagnostics, false));
+    CHECK(diagnostics.empty());
+    CHECK(firstReport.sourceVersion == 1u);
+    CHECK(firstReport.targetVersion == 2u);
+    CHECK(firstReport.changed);
+    CHECK(firstReport.steps.size() == 1u);
+    CHECK(migrated.find("\"schemaVersion\":2") != std::string::npos);
+    CHECK(migrated.find("\"entryParameters\":[]") != std::string::npos);
+    CHECK(migrated.find("\"result\":[]") != std::string::npos);
+    CHECK(migrated.find("\"extensions\":{}") != std::string::npos);
+
+    GameFlowMigrationReport secondReport;
+    std::string migratedAgain;
+    CHECK(migrateGameFlowJson(migrated, migratedAgain, &secondReport,
+        &diagnostics, false));
+    CHECK(migratedAgain == migrated);
+    CHECK(secondReport.sourceVersion == 2u);
+    CHECK(secondReport.targetVersion == 2u);
+    CHECK_FALSE(secondReport.changed);
+    CHECK(secondReport.steps.empty());
+}
+
+TEST_CASE(schema_v2_preserves_subflow_contracts_and_namespaced_extensions)
+{
+    GameFlowDocument document;
+    GameFlowMigrationReport migration;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    CHECK(GameFlowSerializer::deserialize(
+        readFixture("schema-v2.gameflow.json"), document, &diagnostics,
+        &migration));
+    CHECK_FALSE(migration.changed);
+    CHECK(document.schemaVersion == 2u);
+    CHECK(document.entryParameters.size() == 1u);
+    if (!document.entryParameters.empty()) {
+        CHECK(document.entryParameters[0].id == "profileId");
+        CHECK(document.entryParameters[0].required);
+    }
+    CHECK(document.result.size() == 1u);
+    if (!document.result.empty()) {
+        CHECK(document.result[0].id == "outcome");
+    }
+    CHECK(document.extensions.contains("com.aliyat.editor"));
+
+    std::string encoded;
+    CHECK(GameFlowSerializer::serialize(document, encoded, &diagnostics));
+    GameFlowDocument decoded;
+    CHECK(GameFlowSerializer::deserialize(encoded, decoded, &diagnostics));
+    CHECK(decoded.entryParameters.size() == 1u);
+    if (!decoded.entryParameters.empty() && !document.entryParameters.empty()) {
+        CHECK(decoded.entryParameters[0].id == document.entryParameters[0].id);
+        CHECK(decoded.entryParameters[0].type
+            == document.entryParameters[0].type);
+        CHECK(decoded.entryParameters[0].required
+            == document.entryParameters[0].required);
+    }
+    CHECK(decoded.result.size() == 1u);
+    if (!decoded.result.empty() && !document.result.empty()) {
+        CHECK(decoded.result[0].id == document.result[0].id);
+        CHECK(decoded.result[0].type == document.result[0].type);
+        CHECK(decoded.result[0].required == document.result[0].required);
+    }
+    CHECK(decoded.extensions == document.extensions);
+}
+
+TEST_CASE(future_schema_is_rejected_without_modifying_destination)
+{
+    std::string migrated = "leave-this-value";
+    GameFlowMigrationReport migration;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    CHECK_FALSE(migrateGameFlowJson(
+        readFixture("future.gameflow.json"), migrated, &migration,
+        &diagnostics));
+    CHECK(migrated == "leave-this-value");
+    CHECK(migration.sourceVersion == 3u);
+    CHECK_FALSE(migration.changed);
+    CHECK(diagnostics.size() == 1u);
+    if (!diagnostics.empty()) {
+        CHECK(diagnostics[0].path == "$.schemaVersion");
+        CHECK(diagnostics[0].message.find("newer") != std::string::npos);
+    }
+
+    GameFlowDocument destination;
+    destination.id = "unchanged";
+    CHECK_FALSE(GameFlowSerializer::deserialize(
+        readFixture("future.gameflow.json"), destination, &diagnostics));
+    CHECK(destination.id == "unchanged");
 }
 
 TEST_CASE(invalid_fixture_reports_reference_duplicates_and_hierarchy_errors)

@@ -1,5 +1,6 @@
 #include <AYApplication/GameFlowActionRegistry.h>
 #include <AYApplication/GameFlowDocument.h>
+#include <AYApplication/GameFlowMigration.h>
 
 #include <nlohmann/json.hpp>
 
@@ -276,6 +277,13 @@ bool validateGameFlow(const GameFlowDocument& document,
     if (document.initialState.empty()) {
         error("$.initialState", "Initial state must not be empty.");
     }
+    if (!validateFields(
+            document.entryParameters, "$.entryParameters", diagnostics)) {
+        valid = false;
+    }
+    if (!validateFields(document.result, "$.result", diagnostics)) {
+        valid = false;
+    }
 
     std::map<std::string, std::size_t, std::less<>> stateIndices;
     for (std::size_t index = 0; index < document.states.size(); ++index) {
@@ -422,15 +430,41 @@ bool GameFlowSerializer::deserialize(
     GameFlowDocument& document,
     std::vector<GameFlowDiagnostic>* diagnostics)
 {
+    return deserialize(jsonText, document, diagnostics, nullptr);
+}
+
+bool GameFlowSerializer::deserialize(
+    std::string_view jsonText,
+    GameFlowDocument& document,
+    std::vector<GameFlowDiagnostic>* diagnostics,
+    GameFlowMigrationReport* migrationReport)
+{
     if (diagnostics != nullptr) diagnostics->clear();
+    std::string migratedJson;
+    if (!migrateGameFlowJson(
+            jsonText, migratedJson, migrationReport, diagnostics, false)) {
+        return false;
+    }
     try {
-        const json root = json::parse(jsonText.begin(), jsonText.end());
+        const json root = json::parse(migratedJson);
         if (!root.is_object()) throw std::runtime_error("Root must be an object.");
 
         GameFlowDocument decoded;
         decoded.schemaVersion = root.at("schemaVersion").get<std::uint32_t>();
         decoded.id = root.at("id").get<std::string>();
         decoded.initialState = root.at("initialState").get<std::string>();
+        if (root.contains("entryParameters")) {
+            decoded.entryParameters = decodeFields(root["entryParameters"]);
+        }
+        if (root.contains("result")) {
+            decoded.result = decodeFields(root["result"]);
+        }
+        if (root.contains("extensions")) {
+            if (!root["extensions"].is_object()) {
+                throw std::runtime_error("'extensions' must be an object.");
+            }
+            decoded.extensions = decodePayload(root["extensions"]);
+        }
 
         if (root.contains("intents")) {
             if (!root["intents"].is_array()) {
@@ -519,6 +553,9 @@ bool GameFlowSerializer::serialize(
             {"schemaVersion", document.schemaVersion},
             {"id", document.id},
             {"initialState", document.initialState},
+            {"entryParameters", encodeFields(document.entryParameters)},
+            {"result", encodeFields(document.result)},
+            {"extensions", encodePayload(document.extensions)},
             {"intents", json::array()},
             {"states", json::array()},
             {"transitions", json::array()},

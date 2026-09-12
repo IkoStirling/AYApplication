@@ -3,3 +3,4 @@
 #include <AYApplication/GameFlowActionRegistry.h>
 #include <AYApplication/GameFlowCoordinator.h>
 #include <AYApplication/GameFlowDocument.h>
+#include <AYApplication/GameFlowMigration.h>

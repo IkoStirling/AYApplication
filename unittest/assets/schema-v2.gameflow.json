@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 2,
+  "id": "campaign",
+  "initialState": "menu",
+  "entryParameters": [
+    {
+      "id": "profileId",
+      "type": "string",
+      "required": true
+    }
+  ],
+  "result": [
+    {
+      "id": "outcome",
+      "type": "string",
+      "required": true
+    }
+  ],
+  "extensions": {
+    "com.aliyat.editor": {
+      "canvas": {
+        "zoom": 1.25,
+        "origin": [32, 48]
+      }
+    }
+  },
+  "intents": [],
+  "states": [
+    { "id": "menu" }
+  ],
+  "transitions": []
+}
