@@ -1,15 +1,18 @@
 #include <AYApplication/ProjectContentValidator.h>
 #include <AYEntity/EntityModule.h>
 
-#include <filesystem>
 #include <iostream>
 #include <string>
+#include <utility>
 
 int main(int argc, char** argv)
 {
-    if (argc != 4 || std::string(argv[2]) != "--profile") {
+    if ((argc != 4 && argc != 6) || std::string(argv[2]) != "--profile"
+        || (argc == 6
+            && std::string(argv[4]) != "--gameflow-contract")) {
         std::cerr << "Usage: AYProjectContentValidator <project-root> "
-                     "--profile <headless|full-client>\n";
+                     "--profile <headless|full-client> "
+                     "[--gameflow-contract <asset-relative-path>]\n";
         return 2;
     }
     ayt::app::ProjectContentValidationProfile profile;
@@ -23,11 +26,21 @@ int main(int argc, char** argv)
         return 2;
     }
     ayt::entity::registerEntityComponents();
+    ayt::app::ProjectContentValidationOptions options;
+    if (argc == 6) options.gameFlowContractPath = argv[5];
     const auto result = ayt::app::validateProjectContent(
-        std::filesystem::absolute(argv[1]).lexically_normal().string(), profile);
+        argv[1], profile, std::move(options));
     std::cout << profileName << ": " << result.checked() << " file(s): "
               << result.scenes << " scene(s), " << result.uiLayouts
-              << " UI layout(s), " << result.tilemaps << " tilemap file(s)\n";
+              << " UI layout(s), " << result.tilemaps << " tilemap file(s), "
+              << result.gameFlows << " GameFlow file(s)\n";
+    for (const auto& dependency : result.gameFlowDependencies) {
+        std::cout << "dependency["
+                  << ayt::app::projectContentDependencyKindName(
+                      dependency.kind)
+                  << "]: " << dependency.source << " -> "
+                  << dependency.target << '\n';
+    }
     for (const auto& issue : result.issues) {
         std::cerr << issue.path << ": " << issue.message << '\n';
     }

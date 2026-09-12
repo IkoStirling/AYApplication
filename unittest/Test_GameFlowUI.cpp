@@ -184,6 +184,58 @@ GameFlowUIBridgeConfig menuSignalBinding()
     return config;
 }
 
+GameFlowDocument bridgeSubflow(bool invalidContext = false)
+{
+    GameFlowDocument child;
+    child.id = "runtime-child";
+    child.initialState = "waiting";
+    child.intents = {{"finish", {}}};
+    child.states = {{"waiting"}, {"returned"}, {"failed"}};
+
+    GameFlowTransitionDefinition transition;
+    transition.id = "finish_child";
+    transition.fromState = "waiting";
+    transition.triggerIntent = "finish";
+    transition.toState = "returned";
+    if (invalidContext) {
+        GameFlowPayload arguments;
+        arguments["activationId"] = std::string("missing-context-test");
+        arguments["contextId"] = std::string("MissingContext");
+        transition.actions.push_back({
+            std::string(kGameFlowActionUIContextActivate),
+            std::move(arguments)});
+    }
+    transition.actions.push_back({std::string(kGameFlowActionReturn), {}});
+    transition.onFailureState = "failed";
+    child.transitions.push_back(std::move(transition));
+    return child;
+}
+
+GameFlowRuntimeConfig bridgeSubflowConfig(bool invalidContext = false)
+{
+    GameFlowRuntimeConfig config;
+    config.documentPath = assetPath("runtime-subflow.gameflow.json").string();
+    config.enableWorldActions = false;
+    config.configureRegistry = [](
+        GameFlowActionRegistry& registry,
+        std::string& error) {
+        return registerGameFlowUIActionTypes(registry, &error);
+    };
+    config.resolveDocument = [child = bridgeSubflow(invalidContext)](
+        std::string_view id,
+        GameFlowDocument& document,
+        std::string& error) {
+        if (id != child.id) {
+            error = "Unknown test subflow.";
+            return false;
+        }
+        document = child;
+        error.clear();
+        return true;
+    };
+    return config;
+}
+
 } // namespace
 
 TEST_SUITE(GameFlowUIBridgeTests)
@@ -216,6 +268,92 @@ TEST_CASE(action_contracts_register_before_runtime_preflight)
     // by another module; accepting that case keeps setup order independent.
     CHECK(registerGameFlowUIActionTypes(registry, &error));
     CHECK(error.empty());
+}
+
+TEST_CASE(bridge_preflight_validates_ui_actions_in_reachable_subflows)
+{
+    BridgeTestHost host;
+    RecordingScreenHost screenHost;
+    UIFlowRuntime ui(screenHost);
+    std::string error;
+    auto preparation = prepareGameFlowRuntime(
+        bridgeSubflowConfig(true), &error);
+    CHECK_NOT_NULL(preparation);
+    if (preparation == nullptr) return;
+    GameFlowRuntime gameFlow(host, std::move(preparation));
+    CHECK(gameFlow.initialize());
+    CHECK(loadUIFlowFixture(ui, error));
+    GameFlowUIBridge bridge(gameFlow, ui);
+    CHECK_FALSE(bridge.install(&error));
+    CHECK(error.find("runtime-child") != std::string::npos);
+    CHECK(error.find("MissingContext") != std::string::npos
+        || error.find("unknown UIFlow Context") != std::string::npos);
+}
+
+TEST_CASE(ui_request_action_resolves_the_active_subflow_intent_contract)
+{
+    BridgeTestHost host;
+    RecordingScreenHost screenHost;
+    UIFlowRuntime ui(screenHost);
+    std::string error;
+    auto preparation = prepareGameFlowRuntime(
+        bridgeSubflowConfig(), &error);
+    CHECK_NOT_NULL(preparation);
+    if (preparation == nullptr) return;
+    GameFlowRuntime gameFlow(host, std::move(preparation));
+    CHECK(gameFlow.initialize());
+    CHECK(loadUIFlowFixture(ui, error));
+    GameFlowUIBridge bridge(gameFlow, ui);
+    CHECK(bridge.install(&error));
+    if (!bridge.installed()) return;
+
+    gameFlow.update(0.0f);
+    CHECK(gameFlow.coordinator().currentFlow() == "runtime-child");
+    CHECK_NOT_NULL(gameFlow.activeDocument());
+
+    UIFlowPayload inputs;
+    inputs["intent"] = std::string("finish");
+    inputs["difficulty"] = std::string("normal");
+    const UIFlowActionResult accepted = ui.invokeAction(
+        kUIFlowActionGameFlowRequest, std::move(inputs));
+    CHECK(accepted.accepted);
+    gameFlow.update(0.0f);
+    CHECK(gameFlow.coordinator().currentFlow() == "runtime-root");
+    CHECK(gameFlow.currentState() == "ready");
+}
+
+TEST_CASE(ui_signal_binding_resolves_the_active_subflow_intent_contract)
+{
+    BridgeTestHost host;
+    RecordingScreenHost screenHost;
+    UIFlowRuntime ui(screenHost);
+    std::string error;
+    auto preparation = prepareGameFlowRuntime(
+        bridgeSubflowConfig(), &error);
+    CHECK_NOT_NULL(preparation);
+    if (preparation == nullptr) return;
+    GameFlowRuntime gameFlow(host, std::move(preparation));
+    CHECK(gameFlow.initialize());
+    CHECK(loadUIFlowFixture(ui, error));
+
+    GameFlowUIBridgeConfig config;
+    config.signalBindings.push_back({"start_game", "finish"});
+    GameFlowUIBridge bridge(gameFlow, ui, std::move(config));
+    CHECK(bridge.install(&error));
+    if (!bridge.installed()) return;
+    CHECK(ui.start(std::string_view{}, &error));
+    gameFlow.update(0.0f);
+    CHECK(gameFlow.coordinator().currentFlow() == "runtime-child");
+
+    UIFlowPayload payload;
+    payload["difficulty"] = std::string("normal");
+    payload["players"] = std::int64_t(1);
+    CHECK(ui.emitSignal("start_game", std::move(payload), &error));
+    gameFlow.update(0.0f);
+
+    CHECK(gameFlow.coordinator().currentFlow() == "runtime-root");
+    CHECK(gameFlow.currentState() == "ready");
+    CHECK(bridge.lastError().empty());
 }
 
 TEST_CASE(declared_ui_signal_routes_a_typed_payload_to_gameflow_intent)
@@ -309,6 +447,127 @@ TEST_CASE(gameflow_starts_ui_manages_contexts_and_emits_typed_signals)
     CHECK(notices == 1u);
     CHECK(message == "checkpoint saved");
     CHECK(code == 17);
+}
+
+TEST_CASE(ui_reload_rejects_bridge_schema_drift_and_keeps_previous_document)
+{
+    BridgeHarness harness(menuSignalBinding());
+    CHECK(harness.ready);
+    if (!harness.ready) return;
+
+    ayt::ui::UIFlowDocument candidate = *harness.ui.document();
+    candidate.id = "gameflow-ui-host-drift";
+    bool changed = false;
+    for (auto& signal : candidate.signals) {
+        if (signal.id != "start_game") continue;
+        for (auto& field : signal.payload) {
+            if (field.id != "difficulty") continue;
+            field.type = ayt::ui::UIFlowValueType::Integer;
+            changed = true;
+        }
+    }
+    CHECK(changed);
+
+    std::string error;
+    CHECK_FALSE(harness.ui.reload(std::move(candidate), &error));
+    CHECK(error.find("start_game") != std::string::npos);
+    CHECK(error.find("difficulty") != std::string::npos);
+    CHECK(error.find("incompatible") != std::string::npos);
+    CHECK(harness.bridge->installed());
+    CHECK(harness.ui.document()->id == "gameflow-ui-host");
+    const auto* retained = harness.ui.document()->findSignal("start_game");
+    CHECK_NOT_NULL(retained);
+    if (retained == nullptr) return;
+    CHECK(retained->payload.size() == 2u);
+    if (!retained->payload.empty()) {
+        CHECK(retained->payload.front().id == "difficulty");
+        CHECK(retained->payload.front().type
+            == ayt::ui::UIFlowValueType::String);
+    }
+
+    UIFlowPayload payload;
+    payload["difficulty"] = std::string("hard");
+    payload["players"] = std::int64_t(2);
+    CHECK(harness.ui.emitSignal("start_game", std::move(payload), &error));
+    harness.gameFlow->update(0.0f);
+    CHECK(harness.gameFlow->currentState() == "playing");
+}
+
+TEST_CASE(ui_document_validator_cannot_reenter_document_mutation)
+{
+    RecordingScreenHost screenHost;
+    UIFlowRuntime runtime(screenHost);
+    std::string error;
+    CHECK(loadUIFlowFixture(runtime, error));
+    if (!runtime.isLoaded() || runtime.document() == nullptr) return;
+
+    ayt::ui::UIFlowDocument outer = *runtime.document();
+    outer.id = "outer-reload";
+    ayt::ui::UIFlowDocument nested = outer;
+    nested.id = "nested-reload";
+    const std::string outerId = outer.id;
+
+    bool unloadWasIgnored = false;
+    bool nestedReloadWasRejected = false;
+    std::string nestedError;
+    const UIFlowDocumentValidatorToken validator =
+        runtime.addDocumentValidator(
+            [&](const ayt::ui::UIFlowDocument& candidate,
+                std::string& validationError) {
+                if (candidate.id != outerId) return true;
+                runtime.unload();
+                unloadWasIgnored = runtime.isLoaded();
+                nestedReloadWasRejected =
+                    !runtime.reload(nested, &nestedError)
+                    && nestedError.find("already in progress")
+                        != std::string::npos;
+                if (unloadWasIgnored && nestedReloadWasRejected) return true;
+                validationError = "Document mutation reentrancy was not blocked.";
+                return false;
+            });
+    CHECK(validator != 0);
+
+    CHECK(runtime.reload(std::move(outer), &error));
+    CHECK(error.empty());
+    CHECK(unloadWasIgnored);
+    CHECK(nestedReloadWasRejected);
+    CHECK(runtime.isLoaded());
+    CHECK_NOT_NULL(runtime.document());
+    if (runtime.document() != nullptr) {
+        CHECK(runtime.document()->id == "outer-reload");
+    }
+    CHECK(runtime.removeDocumentValidator(validator));
+}
+
+TEST_CASE(gameflow_reload_rejects_ui_action_reference_drift_and_keeps_previous_program)
+{
+    BridgeHarness harness;
+    CHECK(harness.ready);
+    if (!harness.ready) return;
+    const GameFlowProgram* previous = harness.gameFlow->program();
+    CHECK_NOT_NULL(previous);
+    if (previous == nullptr) return;
+    CHECK(previous->rootFlowId == "gameflow-ui-bridge");
+
+    const GameFlowReloadResult result = harness.gameFlow->reload(
+        bridgeSubflowConfig(true));
+    CHECK(result.state == GameFlowReloadState::Rejected);
+    CHECK(result.message.find("runtime-child") != std::string::npos);
+    CHECK(result.message.find("finish_child") != std::string::npos);
+    CHECK(result.message.find("unknown UIFlow Context")
+        != std::string::npos);
+    CHECK_FALSE(harness.gameFlow->reloadPending());
+    CHECK(harness.gameFlow->program() == previous);
+    CHECK(harness.gameFlow->program()->rootFlowId == "gameflow-ui-bridge");
+    CHECK(harness.gameFlow->documentPath()
+        == assetPath("gameflow_ui.gameflow.json").string());
+    CHECK(harness.gameFlow->currentState() == "ready");
+    CHECK(harness.bridge->installed());
+
+    CHECK(harness.gameFlow->request("overlay.show"));
+    harness.gameFlow->update(0.0f);
+    CHECK(harness.gameFlow->currentState() == "overlay");
+    CHECK(containsScreen(harness.ui, "pause"));
 }
 
 TEST_CASE(uninstall_removes_both_directions_and_is_idempotent)

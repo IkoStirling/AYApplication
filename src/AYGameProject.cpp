@@ -2,6 +2,7 @@
 
 #include <AYApplication/EngineModuleContext.h>
 #include <AYApplication/EngineModuleRuntime.h>
+#include <AYApplication/GameFlowAssets.h>
 #include <AYApplication/GameFlowRuntimeModule.h>
 #include <AYApplication/GameFlowWorldActions.h>
 #include <AYApplication/IEngineHost.h>
@@ -10,6 +11,7 @@
 #include <AYGameLoop/SubSystemModule.h>
 #include <AYScene.h>
 
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -22,6 +24,29 @@ namespace
 {
 
 constexpr std::string_view kGameWorldRouterSubSystemName = "GameWorldRouter";
+
+bool endsWithCaseInsensitive(
+    std::string_view value,
+    std::string_view suffix) noexcept
+{
+    if (value.size() < suffix.size()) return false;
+    const std::string_view tail = value.substr(value.size() - suffix.size());
+    for (std::size_t index = 0; index < suffix.size(); ++index) {
+        if (std::tolower(static_cast<unsigned char>(tail[index]))
+            != std::tolower(static_cast<unsigned char>(suffix[index]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool hasWindowsDrivePrefix(std::string_view value) noexcept
+{
+    if (value.size() < 2 || value[1] != ':') return false;
+    const char letter = value.front();
+    return (letter >= 'A' && letter <= 'Z')
+        || (letter >= 'a' && letter <= 'z');
+}
 
 bool isTerminal(RuntimeSceneLoadState state) noexcept
 {
@@ -302,6 +327,60 @@ std::string resolveAssetPath(
     return path.lexically_normal().string();
 }
 
+bool normalizeFlowAssetPath(
+    std::string_view pathValue,
+    std::string& normalized,
+    std::string& error)
+{
+    if (hasWindowsDrivePrefix(pathValue)) {
+        error = "startupFlow must be relative to assetRoot";
+        return false;
+    }
+    if (pathValue.find('\\') != std::string_view::npos) {
+        error = "startupFlow must use portable forward-slash separators";
+        return false;
+    }
+    const std::filesystem::path supplied(pathValue);
+    if (supplied.empty() || supplied.is_absolute()
+        || supplied.has_root_name() || supplied.has_root_directory()) {
+        error = "startupFlow must be relative to assetRoot";
+        return false;
+    }
+    const std::filesystem::path path = supplied.lexically_normal();
+    if (path.empty() || path == ".") {
+        error = "startupFlow must not be empty";
+        return false;
+    }
+    for (const auto& part : path) {
+        if (part == "..") {
+            error = "startupFlow must stay inside assetRoot";
+            return false;
+        }
+    }
+    if (!endsWithCaseInsensitive(
+            path.filename().string(), ".gameflow.json")) {
+        error = "startupFlow must reference a .gameflow.json asset";
+        return false;
+    }
+    normalized = path.generic_string();
+    error.clear();
+    return true;
+}
+
+bool resolveFlowAssetPath(
+    std::string_view pathValue,
+    std::string_view assetRoot,
+    std::string& resolved,
+    std::string& error)
+{
+    std::string normalized;
+    if (!normalizeFlowAssetPath(pathValue, normalized, error)) return false;
+    resolved = (std::filesystem::path(assetRoot)
+                / std::filesystem::path(normalized))
+                   .lexically_normal().string();
+    return true;
+}
+
 const GameWorld* findWorld(
     const std::vector<GameWorld>& worlds,
     std::string_view id) noexcept
@@ -315,27 +394,32 @@ const GameWorld* findWorld(
 }
 
 bool validateGameFlowWorldReferences(
-    const GameFlowDocument& document,
+    const GameFlowProgram& program,
     const std::vector<GameWorld>& worlds,
     std::string& error)
 {
-    for (const auto& transition : document.transitions) {
-        for (std::size_t actionIndex = 0;
-             actionIndex < transition.actions.size();
-             ++actionIndex) {
-            const auto& action = transition.actions[actionIndex];
-            if (action.action != kGameFlowActionWorldReplace) continue;
-            const auto argument = action.arguments.find("worldId");
-            const auto* worldId = argument == action.arguments.end()
-                ? nullptr
-                : std::get_if<std::string>(&argument->second.data);
-            if (worldId == nullptr || findWorld(worlds, *worldId) == nullptr) {
-                error = "GameFlow transition '" + transition.id
-                    + "' action[" + std::to_string(actionIndex)
-                    + "] references an unknown World id: "
-                    + (worldId == nullptr ? std::string("<invalid>")
-                                          : *worldId);
-                return false;
+    for (const auto& [flowId, plan] : program.plans) {
+        const GameFlowDocument& document = plan.document;
+        for (const auto& transition : document.transitions) {
+            for (std::size_t actionIndex = 0;
+                 actionIndex < transition.actions.size();
+                 ++actionIndex) {
+                const auto& action = transition.actions[actionIndex];
+                if (action.action != kGameFlowActionWorldReplace) continue;
+                const auto argument = action.arguments.find("worldId");
+                const auto* worldId = argument == action.arguments.end()
+                    ? nullptr
+                    : std::get_if<std::string>(&argument->second.data);
+                if (worldId == nullptr
+                    || findWorld(worlds, *worldId) == nullptr) {
+                    error = "GameFlow '" + flowId + "' transition '"
+                        + transition.id + "' action["
+                        + std::to_string(actionIndex)
+                        + "] references an unknown World id: "
+                        + (worldId == nullptr ? std::string("<invalid>")
+                                              : *worldId);
+                    return false;
+                }
             }
         }
     }
@@ -390,11 +474,10 @@ bool validateGameProject(const GameProject& project, std::string& error)
                 project.startupWorld;
         return false;
     }
-    if (!project.startupFlow.empty()
-        && !std::filesystem::path(project.startupFlow).filename().string()
-            .ends_with(".gameflow.json")) {
-        error = "startupFlow must reference a .gameflow.json asset";
-        return false;
+    if (!project.startupFlow.empty()) {
+        std::string normalized;
+        if (!normalizeFlowAssetPath(
+                project.startupFlow, normalized, error)) return false;
     }
     return true;
 }
@@ -422,14 +505,13 @@ bool resolveGameProjectStartup(
     }
     if (!commandLine.flowPath.empty()) {
         selection.source = GameProjectStartupSource::CommandLineFlow;
-        selection.flowPath = resolveAssetPath(
-            commandLine.flowPath, assetRoot);
-        return true;
+        return resolveFlowAssetPath(
+            commandLine.flowPath, assetRoot, selection.flowPath, error);
     }
     if (!project.startupFlow.empty()) {
         selection.source = GameProjectStartupSource::ProjectFlow;
-        selection.flowPath = resolveAssetPath(project.startupFlow, assetRoot);
-        return true;
+        return resolveFlowAssetPath(
+            project.startupFlow, assetRoot, selection.flowPath, error);
     }
     if (serverMode) return true;
     if (!project.startupWorld.empty()) {
@@ -492,9 +574,11 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
             .scenePath = startup.scenePath,
             .sceneName = "CommandLineWorld",
         });
-    } else if (startup.source == GameProjectStartupSource::CommandLineFlow
-               || startup.source == GameProjectStartupSource::ProjectFlow) {
-        project.startupFlow = startup.flowPath;
+    } else if (startup.source == GameProjectStartupSource::CommandLineFlow) {
+        // Keep the validated project representation asset-relative. The
+        // resolved path in startup is diagnostic/output data only; runtime
+        // selects the root from the canonical asset catalog below.
+        project.startupFlow = commandLine.flowPath;
     }
 
     if (!validateGameProject(project, error)) {
@@ -503,13 +587,33 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
     }
     project.worlds = resolveWorldPaths(project.worlds, project.assetRoot);
 
-    const bool usesGameFlow = !project.startupFlow.empty();
+    const bool usesGameFlow =
+        startup.source == GameProjectStartupSource::CommandLineFlow
+        || startup.source == GameProjectStartupSource::ProjectFlow;
     std::unique_ptr<GameFlowRuntimePreparation> preparedGameFlow;
     if (usesGameFlow) {
+        auto flowAssets = std::make_shared<GameFlowAssetCatalog>();
+        if (!scanGameFlowAssets(project.assetRoot, *flowAssets, &error)) {
+            std::fprintf(stderr, "[GameProject] %s\n", error.c_str());
+            return static_cast<int>(AppException::Code::ConfigError);
+        }
+        const std::string& startupFlowAsset =
+            startup.source == GameProjectStartupSource::CommandLineFlow
+            ? commandLine.flowPath : project.startupFlow;
+        const GameFlowAssetDocument* rootFlow =
+            flowAssets->findByAssetPath(startupFlowAsset);
+        if (rootFlow == nullptr) {
+            std::fprintf(stderr,
+                "[GameProject] startupFlow is missing, invalid, or resolves "
+                "outside assetRoot: %s\n", startupFlowAsset.c_str());
+            return static_cast<int>(AppException::Code::ConfigError);
+        }
         GameFlowRuntimeConfig config;
-        config.documentPath = project.startupFlow;
+        config.documentPath = rootFlow->absolutePath;
         config.configureRegistry = std::move(project.configureGameFlow);
         config.enableWorldActions = !project.serverMode;
+        config.resolveDocument = makeGameFlowAssetResolver(
+            std::move(flowAssets));
         preparedGameFlow = prepareGameFlowRuntime(
             std::move(config), &error);
         if (!preparedGameFlow) {
@@ -518,7 +622,7 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
         }
         if (!project.serverMode
             && !validateGameFlowWorldReferences(
-                preparedGameFlow->document(), project.worlds, error)) {
+                preparedGameFlow->program(), project.worlds, error)) {
             std::fprintf(stderr, "[GameProject] %s\n", error.c_str());
             return static_cast<int>(AppException::Code::ConfigError);
         }

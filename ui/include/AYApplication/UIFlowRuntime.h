@@ -15,6 +15,7 @@ namespace ayt::app
 
 using UIFlowContextHandle = std::uint64_t;
 using UIFlowSignalSubscription = std::uint64_t;
+using UIFlowDocumentValidatorToken = std::uint64_t;
 using UIFlowPayload = std::map<std::string, ayt::ui::UIFlowValue>;
 
 struct UIFlowScopeBinding
@@ -184,6 +185,9 @@ using UIFlowAsyncGraphRequestHandler = std::function<UIFlowGraphStartResult(
 using UIFlowGraphInterruptHandler = std::function<void(
     UIFlowGraphExecutionId executionId,
     UIFlowGraphInterrupt interrupt)>;
+using UIFlowDocumentValidator = std::function<bool(
+    const ayt::ui::UIFlowDocument& candidate,
+    std::string& error)>;
 
 // Persistent application-level orchestration. It is deliberately independent
 // from Scene and Entity; bridges publish dynamic signals and scope keys.
@@ -239,6 +243,14 @@ public:
         std::string signalId,
         UIFlowSignalHandler handler);
     bool unsubscribeSignal(UIFlowSignalSubscription subscription);
+
+    // Bridges may register cross-document contracts here. Validators run
+    // after UIFlow's own validation and before load/reload mutates runtime
+    // state, so a rejected candidate leaves the current document active.
+    UIFlowDocumentValidatorToken addDocumentValidator(
+        UIFlowDocumentValidator validator);
+    bool removeDocumentValidator(
+        UIFlowDocumentValidatorToken token) noexcept;
 
     bool registerAction(
         std::string actionId,

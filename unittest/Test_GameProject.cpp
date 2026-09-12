@@ -170,6 +170,67 @@ TEST_CASE(rejects_startup_flow_without_the_gameflow_json_suffix)
     CHECK(error.find(".gameflow.json") != std::string::npos);
 }
 
+TEST_CASE(accepts_case_insensitive_startup_flow_suffix)
+{
+    auto project = validProject();
+    project.startupFlow = "flow/Application.GAMEFLOW.JSON";
+    std::string error;
+    CHECK(ayt::app::validateGameProject(project, error));
+    CHECK(error.empty());
+}
+
+TEST_CASE(rejects_startup_flow_paths_outside_the_asset_root)
+{
+    auto project = validProject();
+    project.startupFlow = "../outside.gameflow.json";
+    std::string error;
+    CHECK(!ayt::app::validateGameProject(project, error));
+    CHECK(error.find("inside assetRoot") != std::string::npos);
+
+    project.startupFlow =
+        (std::filesystem::temp_directory_path() / "outside.gameflow.json")
+            .string();
+    CHECK(!ayt::app::validateGameProject(project, error));
+    CHECK(error.find("relative to assetRoot") != std::string::npos);
+}
+
+TEST_CASE(rejects_non_portable_startup_flow_separators)
+{
+    constexpr std::string_view invalidPaths[] = {
+        "flow\\application.gameflow.json",
+        "..\\outside.gameflow.json",
+        "C:\\outside.gameflow.json",
+        "C:/outside.gameflow.json",
+        "C:outside.gameflow.json",
+    };
+    for (const std::string_view path : invalidPaths) {
+        auto project = validProject();
+        project.startupFlow = path;
+        std::string error;
+        CHECK_FALSE(ayt::app::validateGameProject(project, error));
+        CHECK_FALSE(error.empty());
+    }
+}
+
+TEST_CASE(rejects_command_line_flow_paths_outside_the_asset_root)
+{
+    const auto project = validProject();
+    ayt::app::AppCommandLine commandLine;
+    commandLine.flowPath = "../../outside.gameflow.json";
+    ayt::app::GameProjectStartupSelection selection;
+    std::string error;
+    CHECK(!ayt::app::resolveGameProjectStartup(
+        project, commandLine, selection, error));
+    CHECK(error.find("inside assetRoot") != std::string::npos);
+
+    commandLine.flowPath =
+        (std::filesystem::temp_directory_path() / "outside.gameflow.json")
+            .string();
+    CHECK(!ayt::app::resolveGameProjectStartup(
+        project, commandLine, selection, error));
+    CHECK(error.find("relative to assetRoot") != std::string::npos);
+}
+
 TEST_CASE(headless_project_can_omit_world_catalog)
 {
     ayt::app::GameProject project;

@@ -15,11 +15,37 @@ namespace ayt::app
 using GameFlowGeneration = std::uint64_t;
 using GameFlowActionExecutionId = std::uint64_t;
 
+// Optional authoring/package metadata for arguments that reference content
+// outside the GameFlow document. Runtime handlers still receive plain typed
+// arguments; validators use this information to build and verify the asset
+// closure without hard-coding project action ids.
+enum class GameFlowReferenceKind : std::uint8_t
+{
+    AssetPath,
+    WorldId,
+    UIFlowEntry,
+    UIContext,
+    UISignal,
+};
+
+struct GameFlowActionReferenceDefinition
+{
+    std::string argumentId;
+    GameFlowReferenceKind kind = GameFlowReferenceKind::AssetPath;
+    bool allowEmpty = false;
+
+    friend bool operator==(const GameFlowActionReferenceDefinition&,
+                           const GameFlowActionReferenceDefinition&) = default;
+};
+
 struct GameFlowActionTypeDefinition
 {
     std::string id;
     std::vector<GameFlowFieldDefinition> arguments;
     bool asynchronous = false;
+    // Kept at the tail so existing aggregate initialization remains source
+    // compatible.
+    std::vector<GameFlowActionReferenceDefinition> references;
 };
 
 struct GameFlowGuardTypeDefinition
@@ -84,6 +110,9 @@ using GameFlowActionHandler =
     std::function<GameFlowActionResult(const GameFlowActionInvocation&)>;
 using GameFlowGuardHandler =
     std::function<bool(const GameFlowGuardInvocation&)>;
+
+[[nodiscard]] const char* gameFlowReferenceKindName(
+    GameFlowReferenceKind value) noexcept;
 
 // The same definitions feed runtime validation and future editor authoring.
 // Runtime handlers are intentionally host-owned and replaceable during setup.

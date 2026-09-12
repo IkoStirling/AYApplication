@@ -29,6 +29,7 @@ set(HEADERS
     interface/AYApplication/EngineRuntimeScope.h
     interface/AYApplication/GameProject.h
     interface/AYApplication/ProjectContentValidator.h
+    interface/AYApplication/ProjectContentValidatorVersion.h
     interface/AYApplication/IHostPluginHooks.h
     interface/AYApplication/RegisterDefaultModules.h
     interface/AYApplication/RuntimeSceneLoader.h
@@ -171,19 +172,24 @@ find_package(nlohmann_json CONFIG REQUIRED)
 # validation tools execute exactly the same transition semantics as clients.
 add_library(AYApplicationGameFlow STATIC
     gameflow/src/AYGameFlowActionRegistry.cpp
+    gameflow/src/AYGameFlowAssets.cpp
     gameflow/src/AYGameFlowCoordinator.cpp
     gameflow/src/AYGameFlowDeterminism.cpp
     gameflow/src/AYGameFlowDiagnostics.cpp
     gameflow/src/AYGameFlowDocument.cpp
     gameflow/src/AYGameFlowMigration.cpp
     gameflow/src/AYGameFlowProgram.cpp
+    gameflow/src/AYGameFlowStandardActions.cpp
     gameflow/include/AYApplication/GameFlowActionRegistry.h
+    gameflow/include/AYApplication/GameFlowAssets.h
     gameflow/include/AYApplication/GameFlowCoordinator.h
     gameflow/include/AYApplication/GameFlowDeterminism.h
     gameflow/include/AYApplication/GameFlowDiagnostics.h
     gameflow/include/AYApplication/GameFlowDocument.h
     gameflow/include/AYApplication/GameFlowMigration.h
     gameflow/include/AYApplication/GameFlowProgram.h
+    gameflow/include/AYApplication/GameFlowStandardActions.h
+    gameflow/include/AYApplication/GameFlowVersion.h
     AYApplicationGameFlow.h
 )
 target_include_directories(AYApplicationGameFlow PUBLIC
@@ -194,6 +200,8 @@ target_link_libraries(AYApplicationGameFlow PRIVATE
     nlohmann_json::nlohmann_json
 )
 target_compile_features(AYApplicationGameFlow PUBLIC cxx_std_23)
+target_compile_definitions(AYApplicationGameFlow PUBLIC
+    AYAPPLICATION_GAMEFLOW_SOURCE_ABI_VERSION=2)
 target_compile_options(AYApplicationGameFlow PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
@@ -302,6 +310,7 @@ if(BUILD_TESTING)
         $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
     )
     ay_add_test(GameFlowCoreTest LABELS "game-flow;headless;ayapplication")
+
     if(TARGET AYApplicationGameFlowReplay)
         add_executable(GameFlowReplayTest
             unittest/TestMain.cpp
@@ -324,6 +333,7 @@ if(BUILD_TESTING)
     add_executable(GameFlowWorldTest
         unittest/TestMain.cpp
         unittest/Test_GameFlowWorld.cpp
+        unittest/Test_GameProject.cpp
     )
     target_link_libraries(GameFlowWorldTest PRIVATE
         AYApplicationGameFlowWorld
@@ -358,20 +368,42 @@ endif()
 
 add_library(AYProjectContentValidationCore STATIC
     src/AYProjectContentValidator.cpp
-    interface/AYApplication/ProjectContentValidator.h)
+    interface/AYApplication/ProjectContentValidator.h
+    interface/AYApplication/ProjectContentValidatorVersion.h)
 target_include_directories(AYProjectContentValidationCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/interface)
 target_link_libraries(AYProjectContentValidationCore
-    PUBLIC AYScene AYResource
+    PUBLIC AYScene AYResource AYApplicationGameFlow
     PRIVATE nlohmann_json::nlohmann_json)
-target_compile_definitions(AYProjectContentValidationCore PRIVATE
-    AY_APPLICATION_HAS_DEVICE=${AY_APPLICATION_HAS_DEVICE})
-if(AY_APPLICATION_HAS_DEVICE AND TARGET AYUI)
+target_compile_definitions(AYProjectContentValidationCore PUBLIC
+    AYAPPLICATION_CONTENT_VALIDATOR_SOURCE_ABI_VERSION=2)
+set(AY_APPLICATION_CONTENT_VALIDATOR_HAS_UI 0)
+if(TARGET AYUI)
+    set(AY_APPLICATION_CONTENT_VALIDATOR_HAS_UI 1)
     target_link_libraries(AYProjectContentValidationCore PRIVATE AYUI)
 endif()
+target_compile_definitions(AYProjectContentValidationCore PRIVATE
+    AY_APPLICATION_CONTENT_VALIDATOR_HAS_UI=${AY_APPLICATION_CONTENT_VALIDATOR_HAS_UI})
 target_compile_options(AYProjectContentValidationCore PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+
+if(BUILD_TESTING)
+    add_executable(ProjectContentValidatorGameFlowTest
+        unittest/TestMain.cpp
+        unittest/Test_ProjectContentValidatorGameFlow.cpp)
+    target_link_libraries(ProjectContentValidatorGameFlowTest PRIVATE
+        AYProjectContentValidationCore
+        AYTest)
+    target_compile_definitions(ProjectContentValidatorGameFlowTest PRIVATE
+        AY_APPLICATION_CONTENT_VALIDATOR_OUTPUT_ROOT="${CMAKE_CURRENT_BINARY_DIR}/project-content-validator-test-output"
+        AY_APPLICATION_CONTENT_VALIDATOR_HAS_UI=${AY_APPLICATION_CONTENT_VALIDATOR_HAS_UI})
+    target_compile_options(ProjectContentValidatorGameFlowTest PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+    ay_add_test(ProjectContentValidatorGameFlowTest
+        LABELS "game-flow;content-validation;headless;ayapplication")
+endif()
 
 option(AY_BUILD_CONTENT_VALIDATOR
     "Build the independent project content validator" ${BUILD_TESTING})

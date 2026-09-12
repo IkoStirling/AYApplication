@@ -3,6 +3,7 @@
 #include <AYApplication/GameFlowProgram.h>
 #include <AYGameLoop/IGameLoop.h>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -21,13 +22,18 @@ inline constexpr std::string_view kGameFlowRuntimeSubSystemName =
 
 using ConfigureGameFlowRegistry =
     std::function<bool(GameFlowActionRegistry&, std::string&)>;
+using GameFlowReloadValidatorToken = std::uint64_t;
+using GameFlowReloadValidator = std::function<bool(
+    const GameFlowProgram& candidate,
+    const GameFlowActionRegistry& candidateRegistry,
+    std::string& error)>;
 
 struct GameFlowRuntimeConfig
 {
     std::string documentPath;
     ConfigureGameFlowRegistry configureRegistry;
     bool enableWorldActions = true;
-    std::string startupIntent = "app.start";
+    std::string startupIntent{kGameFlowDefaultStartupIntent};
     GameFlowDocumentResolver resolveDocument;
     GameFlowProgramBuildOptions programOptions;
     GameFlowPayload rootParameters;
@@ -71,6 +77,7 @@ public:
     [[nodiscard]] std::string_view startupIntent() const noexcept;
     [[nodiscard]] bool worldActionsEnabled() const noexcept;
     [[nodiscard]] const GameFlowDocument& document() const noexcept;
+    [[nodiscard]] const GameFlowProgram& program() const noexcept;
     [[nodiscard]] const std::vector<GameFlowDiagnostic>& diagnostics()
         const noexcept;
 
@@ -123,6 +130,8 @@ public:
     [[nodiscard]] const std::vector<GameFlowDiagnostic>& diagnostics()
         const noexcept;
     [[nodiscard]] const GameFlowDocument* document() const noexcept;
+    [[nodiscard]] const GameFlowProgram* program() const noexcept;
+    [[nodiscard]] const GameFlowDocument* activeDocument() const noexcept;
     [[nodiscard]] GameFlowCoordinator& coordinator() noexcept;
     [[nodiscard]] const GameFlowCoordinator& coordinator() const noexcept;
     [[nodiscard]] const GameFlowActionRegistry* registry() const noexcept;
@@ -134,6 +143,13 @@ public:
         GameFlowActionHandler handler,
         std::string* error = nullptr);
     bool unbindActionHandler(std::string_view actionId) noexcept;
+
+    // Bridges may add cross-module contracts that are evaluated before a
+    // prepared candidate is accepted and again before a deferred swap.
+    GameFlowReloadValidatorToken addReloadValidator(
+        GameFlowReloadValidator validator);
+    bool removeReloadValidator(
+        GameFlowReloadValidatorToken token) noexcept;
 
     // Fully validates a candidate before accepting it. A valid candidate is
     // applied immediately at an idle root, or retained until the next reload

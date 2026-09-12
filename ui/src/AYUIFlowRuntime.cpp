@@ -34,6 +34,23 @@ void writeError(std::string* output, const std::string& value)
     if (output != nullptr) *output = value;
 }
 
+class ScopedBooleanFlag
+{
+public:
+    explicit ScopedBooleanFlag(bool& value) noexcept : _value(value)
+    {
+        _value = true;
+    }
+
+    ~ScopedBooleanFlag() { _value = false; }
+
+    ScopedBooleanFlag(const ScopedBooleanFlag&) = delete;
+    ScopedBooleanFlag& operator=(const ScopedBooleanFlag&) = delete;
+
+private:
+    bool& _value;
+};
+
 bool isNull(const UIFlowValue& value)
 {
     return std::holds_alternative<std::monostate>(value.data);
@@ -204,6 +221,12 @@ public:
         UIFlowSignalHandler handler;
     };
 
+    struct DocumentValidator
+    {
+        UIFlowDocumentValidatorToken token = 0;
+        UIFlowDocumentValidator callback;
+    };
+
     struct PendingGraphPipeline
     {
         std::string regionId;
@@ -232,6 +255,36 @@ public:
     {
         lastError.clear();
         if (output != nullptr) output->clear();
+    }
+
+    bool validateCandidateDocument(
+        const ayt::ui::UIFlowDocument& candidate,
+        std::string& error) const
+    {
+        std::vector<UIFlowDocumentValidator> callbacks;
+        callbacks.reserve(documentValidators.size());
+        for (const DocumentValidator& validator : documentValidators) {
+            callbacks.push_back(validator.callback);
+        }
+        for (const UIFlowDocumentValidator& callback : callbacks) {
+            std::string validationError;
+            try {
+                if (callback(candidate, validationError)) continue;
+            } catch (const std::exception& exception) {
+                validationError =
+                    "UI Flow document validator threw an exception: "
+                    + std::string(exception.what());
+            } catch (...) {
+                validationError =
+                    "UI Flow document validator threw an exception.";
+            }
+            error = validationError.empty()
+                ? "UI Flow document was rejected by a runtime bridge."
+                : std::move(validationError);
+            return false;
+        }
+        error.clear();
+        return true;
     }
 
     void appendTrace(std::string category, std::string id, std::string detail)
@@ -1078,6 +1131,37 @@ public:
         return true;
     }
 
+    void unloadDocument() noexcept
+    {
+        if (graphInterruptHandler) {
+            for (const auto& value : pendingPipelines) {
+                if (value.second.executionId != 0) {
+                    try {
+                        graphInterruptHandler(
+                            value.second.executionId,
+                            UIFlowGraphInterrupt::Cancel);
+                    } catch (...) {
+                    }
+                }
+            }
+        }
+        unmountAll();
+        document = {};
+        activeContexts.clear();
+        restoreFloors.clear();
+        regionStates.clear();
+        scopeKeys.clear();
+        signalQueue.clear();
+        pendingPipelines.clear();
+        executionRegions.clear();
+        deferredTransitions.clear();
+        loaded = false;
+        started = false;
+        dispatchingSignals = false;
+        lastError.clear();
+        activeEntryId.clear();
+    }
+
     IUIFlowScreenHost& host;
     ayt::ui::UIFlowDocument document;
     bool loaded = false;
@@ -1089,6 +1173,7 @@ public:
     std::unordered_map<std::string, std::string> regionStates;
     std::deque<QueuedSignal> signalQueue;
     std::vector<Subscription> subscriptions;
+    std::vector<DocumentValidator> documentValidators;
     std::unordered_map<std::string, UIFlowActionHandler> actions;
     UIFlowGuardEvaluator guardEvaluator;
     UIFlowGraphRequestHandler graphHandler;
@@ -1103,10 +1188,12 @@ public:
     std::uint64_t nextActivationSerial = 1;
     std::uint64_t nextMountId = 1;
     std::uint64_t nextSubscription = 1;
+    std::uint64_t nextDocumentValidator = 1;
     std::uint64_t nextGraphExecution = 1;
     std::uint64_t nextTraceSerial = 1;
     bool dispatchingSignals = false;
     bool replaying = false;
+    bool documentMutationInProgress = false;
     std::string lastError;
     std::string activeEntryId;
 };
@@ -1146,6 +1233,12 @@ bool UIFlowRuntime::load(
     ayt::ui::UIFlowDocument document,
     std::string* error)
 {
+    if (_impl->documentMutationInProgress) {
+        _impl->setLastError(
+            "UI Flow document mutation is already in progress.", error);
+        return false;
+    }
+    ScopedBooleanFlag mutationGuard(_impl->documentMutationInProgress);
     std::vector<ayt::ui::UIFlowDiagnostic> diagnostics;
     if (!ayt::ui::validateUIFlow(document, &diagnostics)) {
         if (diagnostics.empty()) {
@@ -1159,7 +1252,14 @@ bool UIFlowRuntime::load(
         }
         return false;
     }
-    unload();
+    std::string validationError;
+    if (!_impl->validateCandidateDocument(document, validationError)) {
+        _impl->setLastError(validationError, error);
+        _impl->appendTrace(
+            "Load", document.id, "rejected: " + validationError);
+        return false;
+    }
+    _impl->unloadDocument();
     _impl->document = std::move(document);
     _impl->loaded = true;
     _impl->scopeKeys[UIFlowScope::Application] = "application";
@@ -1172,6 +1272,12 @@ bool UIFlowRuntime::reload(
     std::string* error)
 {
     if (!_impl->loaded) return load(std::move(document), error);
+    if (_impl->documentMutationInProgress) {
+        _impl->setLastError(
+            "UI Flow document mutation is already in progress.", error);
+        return false;
+    }
+    ScopedBooleanFlag mutationGuard(_impl->documentMutationInProgress);
     std::vector<ayt::ui::UIFlowDiagnostic> diagnostics;
     if (!ayt::ui::validateUIFlow(document, &diagnostics)) {
         const std::string message = diagnostics.empty()
@@ -1187,6 +1293,13 @@ bool UIFlowRuntime::reload(
         _impl->setLastError(
             "UI Flow cannot reload while an asynchronous graph is running.",
             error);
+        return false;
+    }
+    std::string validationError;
+    if (!_impl->validateCandidateDocument(document, validationError)) {
+        _impl->setLastError(validationError, error);
+        _impl->appendTrace(
+            "Reload", document.id, "rejected: " + validationError);
         return false;
     }
 
@@ -1366,32 +1479,8 @@ bool UIFlowRuntime::start(std::string_view entry, std::string* error)
 void UIFlowRuntime::unload() noexcept
 {
     if (!_impl) return;
-    if (_impl->graphInterruptHandler) {
-        for (const auto& value : _impl->pendingPipelines) {
-            if (value.second.executionId != 0) {
-                try {
-                    _impl->graphInterruptHandler(
-                        value.second.executionId, UIFlowGraphInterrupt::Cancel);
-                } catch (...) {
-                }
-            }
-        }
-    }
-    _impl->unmountAll();
-    _impl->document = {};
-    _impl->activeContexts.clear();
-    _impl->restoreFloors.clear();
-    _impl->regionStates.clear();
-    _impl->scopeKeys.clear();
-    _impl->signalQueue.clear();
-    _impl->pendingPipelines.clear();
-    _impl->executionRegions.clear();
-    _impl->deferredTransitions.clear();
-    _impl->loaded = false;
-    _impl->started = false;
-    _impl->dispatchingSignals = false;
-    _impl->lastError.clear();
-    _impl->activeEntryId.clear();
+    if (_impl->documentMutationInProgress) return;
+    _impl->unloadDocument();
 }
 
 bool UIFlowRuntime::isLoaded() const noexcept
@@ -1626,6 +1715,39 @@ bool UIFlowRuntime::unsubscribeSignal(UIFlowSignalSubscription subscription)
             }),
         _impl->subscriptions.end());
     return _impl->subscriptions.size() != oldSize;
+}
+
+UIFlowDocumentValidatorToken UIFlowRuntime::addDocumentValidator(
+    UIFlowDocumentValidator validator)
+{
+    if (!validator) return 0;
+    while (_impl->nextDocumentValidator == 0
+        || std::any_of(_impl->documentValidators.begin(),
+            _impl->documentValidators.end(),
+            [&](const Impl::DocumentValidator& value) {
+                return value.token == _impl->nextDocumentValidator;
+            })) {
+        ++_impl->nextDocumentValidator;
+    }
+    const UIFlowDocumentValidatorToken token =
+        _impl->nextDocumentValidator++;
+    _impl->documentValidators.push_back(
+        Impl::DocumentValidator{token, std::move(validator)});
+    return token;
+}
+
+bool UIFlowRuntime::removeDocumentValidator(
+    UIFlowDocumentValidatorToken token) noexcept
+{
+    const auto oldSize = _impl->documentValidators.size();
+    _impl->documentValidators.erase(
+        std::remove_if(_impl->documentValidators.begin(),
+            _impl->documentValidators.end(),
+            [token](const Impl::DocumentValidator& value) {
+                return value.token == token;
+            }),
+        _impl->documentValidators.end());
+    return _impl->documentValidators.size() != oldSize;
 }
 
 bool UIFlowRuntime::registerAction(

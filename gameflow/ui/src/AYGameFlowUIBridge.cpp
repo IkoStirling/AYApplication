@@ -277,43 +277,6 @@ bool parseScope(std::string_view value, UIFlowScope& scope)
     return true;
 }
 
-bool compatibleActionType(const GameFlowActionTypeDefinition& value,
-                          const GameFlowActionTypeDefinition& expected)
-{
-    if (value.id != expected.id
-        || value.asynchronous != expected.asynchronous
-        || value.arguments.size() != expected.arguments.size()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < value.arguments.size(); ++index) {
-        const auto& left = value.arguments[index];
-        const auto& right = expected.arguments[index];
-        if (left.id != right.id || left.type != right.type
-            || left.required != right.required
-            || left.defaultValue != right.defaultValue) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::vector<GameFlowActionTypeDefinition> actionTypes()
-{
-    return {
-        {std::string(kGameFlowActionUIFlowStart),
-            {{"entry", GameFlowValueType::String, false, ""}}, false},
-        {std::string(kGameFlowActionUIContextActivate),
-            {{"activationId", GameFlowValueType::String, true, {}},
-             {"contextId", GameFlowValueType::String, true, {}},
-             {"scope", GameFlowValueType::String, false, "application"},
-             {"scopeKey", GameFlowValueType::String, false, ""}}, false},
-        {std::string(kGameFlowActionUIContextDeactivate),
-            {{"activationId", GameFlowValueType::String, true, {}}}, false},
-        {std::string(kGameFlowActionUISignalEmit),
-            {{"signalId", GameFlowValueType::String, true, {}}}, false},
-    };
-}
-
 bool validateRequestAction(const UIFlowDocument& uiDocument,
                            std::string& error)
 {
@@ -341,6 +304,13 @@ bool validateActionReferences(const GameFlowDocument& gameDocument,
         const GameFlowIntentDefinition* sourceIntent =
             gameDocument.findIntent(transition.triggerIntent);
         for (const auto& action : transition.actions) {
+            std::string semanticError;
+            if (!validateGameFlowStandardActionSemantics(
+                    action, &semanticError)) {
+                error = "GameFlow transition '" + transition.id + "': "
+                    + semanticError;
+                return false;
+            }
             if (action.action == kGameFlowActionUIFlowStart) {
                 const auto found = action.arguments.find("entry");
                 const auto* entry = found == action.arguments.end()
@@ -352,14 +322,6 @@ bool validateActionReferences(const GameFlowDocument& gameDocument,
                     return false;
                 }
             } else if (action.action == kGameFlowActionUIContextActivate) {
-                const auto activation = action.arguments.find("activationId");
-                const auto* activationId = activation == action.arguments.end()
-                    ? nullptr : std::get_if<std::string>(&activation->second.data);
-                if (activationId == nullptr || activationId->empty()) {
-                    error = "GameFlow transition '" + transition.id
-                        + "' has an empty UI Context activation id.";
-                    return false;
-                }
                 const auto context = action.arguments.find("contextId");
                 const auto* contextId = context == action.arguments.end()
                     ? nullptr : std::get_if<std::string>(&context->second.data);
@@ -367,34 +329,6 @@ bool validateActionReferences(const GameFlowDocument& gameDocument,
                     || uiDocument.findContext(*contextId) == nullptr) {
                     error = "GameFlow transition '" + transition.id
                         + "' references an unknown UIFlow Context.";
-                    return false;
-                }
-                const auto scopeValue = action.arguments.find("scope");
-                const auto* scopeName = scopeValue == action.arguments.end()
-                    ? nullptr : std::get_if<std::string>(&scopeValue->second.data);
-                UIFlowScope scope = UIFlowScope::Application;
-                if (scopeName == nullptr || !parseScope(*scopeName, scope)) {
-                    error = "GameFlow transition '" + transition.id
-                        + "' has an invalid UI Context scope.";
-                    return false;
-                }
-                const auto keyValue = action.arguments.find("scopeKey");
-                const auto* scopeKey = keyValue == action.arguments.end()
-                    ? nullptr : std::get_if<std::string>(&keyValue->second.data);
-                if (scopeKey == nullptr
-                    || (scope == UIFlowScope::Application
-                        && !scopeKey->empty() && *scopeKey != "application")) {
-                    error = "GameFlow transition '" + transition.id
-                        + "' has an invalid Application UI Context scope key.";
-                    return false;
-                }
-            } else if (action.action == kGameFlowActionUIContextDeactivate) {
-                const auto activation = action.arguments.find("activationId");
-                const auto* activationId = activation == action.arguments.end()
-                    ? nullptr : std::get_if<std::string>(&activation->second.data);
-                if (activationId == nullptr || activationId->empty()) {
-                    error = "GameFlow transition '" + transition.id
-                        + "' has an empty UI Context activation id.";
                     return false;
                 }
             } else if (action.action == kGameFlowActionUISignalEmit) {
@@ -419,38 +353,85 @@ bool validateActionReferences(const GameFlowDocument& gameDocument,
     return true;
 }
 
-} // namespace
-
-bool registerGameFlowUIActionTypes(
-    GameFlowActionRegistry& registry,
-    std::string* error)
+bool validateBridgeContract(
+    const GameFlowProgram& gameProgram,
+    const GameFlowActionRegistry& registry,
+    const UIFlowDocument& uiDocument,
+    const GameFlowUIBridgeConfig& config,
+    std::string& error)
 {
-    std::vector<std::string> added;
-    for (auto definition : actionTypes()) {
-        const auto* existing = registry.findAction(definition.id);
-        if (existing != nullptr) {
-            if (compatibleActionType(*existing, definition)) continue;
-            for (auto current = added.rbegin(); current != added.rend(); ++current) {
-                (void)registry.unregisterAction(*current);
-            }
-            if (error != nullptr) {
-                *error = "Existing GameFlow action type '" + definition.id
-                    + "' is incompatible with the UI bridge.";
-            }
+    for (const auto& expected : gameFlowUIActionTypes()) {
+        const auto* existing = registry.findAction(expected.id);
+        if (existing == nullptr
+            || !gameFlowActionTypeCompatible(*existing, expected)) {
+            error =
+                "GameFlow UI action metadata is missing or incompatible: '"
+                + expected.id + "'.";
             return false;
         }
-        const std::string id = definition.id;
-        if (!registry.registerActionType(std::move(definition), false, error)) {
-            for (auto current = added.rbegin(); current != added.rend(); ++current) {
-                (void)registry.unregisterAction(*current);
-            }
-            return false;
-        }
-        added.push_back(id);
     }
-    if (error != nullptr) error->clear();
+
+    std::string validationError;
+    if (config.enableRequestAction
+        && !validateRequestAction(uiDocument, validationError)) {
+        error = std::move(validationError);
+        return false;
+    }
+    for (const auto& [flowId, plan] : gameProgram.plans) {
+        if (!validateActionReferences(
+                plan.document, uiDocument, validationError)) {
+            error = "GameFlow '" + flowId + "': "
+                + std::move(validationError);
+            return false;
+        }
+    }
+
+    std::set<std::string, std::less<>> mappedPairs;
+    for (const auto& binding : config.signalBindings) {
+        if (binding.signalId.empty() || binding.intentId.empty()) {
+            error =
+                "GameFlow UI signal bindings require non-empty ids.";
+            return false;
+        }
+        const std::string pairKey =
+            binding.signalId + "\x1f" + binding.intentId;
+        if (!mappedPairs.insert(pairKey).second) {
+            error = "UI signal-to-intent binding is duplicated: '"
+                + binding.signalId + "' -> '" + binding.intentId + "'.";
+            return false;
+        }
+        const UIFlowSignalDefinition* signal =
+            uiDocument.findSignal(binding.signalId);
+        if (signal == nullptr) {
+            error = "Unknown UIFlow Signal in GameFlow binding: '"
+                + binding.signalId + "'.";
+            return false;
+        }
+        bool foundIntent = false;
+        for (const auto& [flowId, plan] : gameProgram.plans) {
+            const GameFlowIntentDefinition* intent =
+                plan.document.findIntent(binding.intentId);
+            if (intent == nullptr) continue;
+            foundIntent = true;
+            if (!validateSignalToIntentSchema(
+                    *signal, *intent, validationError)) {
+                error = "GameFlow '" + flowId + "': "
+                    + std::move(validationError);
+                return false;
+            }
+        }
+        if (!foundIntent) {
+            error = "Unknown GameFlow intent in UI signal binding: '"
+                + binding.intentId + "'.";
+            return false;
+        }
+    }
+
+    error.clear();
     return true;
 }
+
+} // namespace
 
 class GameFlowUIBridge::Impl
 {
@@ -489,6 +470,8 @@ public:
     std::shared_ptr<State> state;
     std::vector<HandlerBinding> handlers;
     std::vector<UIFlowSignalSubscription> subscriptions;
+    GameFlowReloadValidatorToken gameReloadValidator = 0;
+    UIFlowDocumentValidatorToken uiDocumentValidator = 0;
     bool requestActionRegistered = false;
 
     void restoreHandlers() noexcept
@@ -508,6 +491,16 @@ public:
 
     void rollback() noexcept
     {
+        if (gameReloadValidator != 0) {
+            (void)state->gameFlow->removeReloadValidator(
+                gameReloadValidator);
+            gameReloadValidator = 0;
+        }
+        if (uiDocumentValidator != 0) {
+            (void)state->uiFlow->removeDocumentValidator(
+                uiDocumentValidator);
+            uiDocumentValidator = 0;
+        }
         for (const auto subscription : subscriptions) {
             (void)state->uiFlow->unsubscribeSignal(subscription);
         }
@@ -567,58 +560,19 @@ bool GameFlowUIBridge::install(std::string* error)
     GameFlowRuntime& gameFlow = *_impl->state->gameFlow;
     UIFlowRuntime& uiFlow = *_impl->state->uiFlow;
     const GameFlowActionRegistry* registry = gameFlow.registry();
-    const GameFlowDocument* gameDocument = gameFlow.document();
+    const GameFlowProgram* gameProgram = gameFlow.program();
     const UIFlowDocument* uiDocument = uiFlow.document();
-    if (!gameFlow.ready() || registry == nullptr || gameDocument == nullptr) {
+    if (!gameFlow.ready() || registry == nullptr || gameProgram == nullptr) {
         return fail("GameFlow runtime is not ready for the UI bridge.");
     }
     if (!uiFlow.isLoaded() || uiDocument == nullptr) {
         return fail("UIFlow runtime is not loaded for the GameFlow bridge.");
     }
 
-    for (const auto& expected : actionTypes()) {
-        const auto* existing = registry->findAction(expected.id);
-        if (existing == nullptr || !compatibleActionType(*existing, expected)) {
-            return fail("GameFlow UI action metadata is missing or incompatible: '"
-                + expected.id + "'.");
-        }
-    }
-
     std::string validationError;
-    if (_impl->config.enableRequestAction
-        && !validateRequestAction(*uiDocument, validationError)) {
+    if (!validateBridgeContract(*gameProgram, *registry, *uiDocument,
+            _impl->config, validationError)) {
         return fail(std::move(validationError));
-    }
-    if (!validateActionReferences(
-            *gameDocument, *uiDocument, validationError)) {
-        return fail(std::move(validationError));
-    }
-
-    std::set<std::string, std::less<>> mappedPairs;
-    for (const auto& binding : _impl->config.signalBindings) {
-        if (binding.signalId.empty() || binding.intentId.empty()) {
-            return fail("GameFlow UI signal bindings require non-empty ids.");
-        }
-        const std::string pairKey = binding.signalId + "\x1f" + binding.intentId;
-        if (!mappedPairs.insert(pairKey).second) {
-            return fail("UI signal-to-intent binding is duplicated: '"
-                + binding.signalId + "' -> '" + binding.intentId + "'.");
-        }
-        const UIFlowSignalDefinition* signal =
-            uiDocument->findSignal(binding.signalId);
-        const GameFlowIntentDefinition* intent =
-            gameDocument->findIntent(binding.intentId);
-        if (signal == nullptr) {
-            return fail("Unknown UIFlow Signal in GameFlow binding: '"
-                + binding.signalId + "'.");
-        }
-        if (intent == nullptr) {
-            return fail("Unknown GameFlow intent in UI signal binding: '"
-                + binding.intentId + "'.");
-        }
-        if (!validateSignalToIntentSchema(*signal, *intent, validationError)) {
-            return fail(std::move(validationError));
-        }
     }
 
     const std::weak_ptr<Impl::State> weak = _impl->state;
@@ -639,7 +593,7 @@ bool GameFlowUIBridge::install(std::string* error)
                             "gameflow.request requires a non-empty intent.");
                     }
                     const GameFlowDocument* document =
-                        state->gameFlow->document();
+                        state->gameFlow->activeDocument();
                     const GameFlowIntentDefinition* intent = document == nullptr
                         ? nullptr : document->findIntent(*intentId);
                     if (intent == nullptr) {
@@ -679,7 +633,7 @@ bool GameFlowUIBridge::install(std::string* error)
     }
 
     _impl->handlers.clear();
-    for (const auto& definition : actionTypes()) {
+    for (const auto& definition : gameFlowUIActionTypes()) {
         Impl::HandlerBinding binding;
         binding.id = definition.id;
         if (const auto* previous = registry->findActionHandler(binding.id)) {
@@ -845,7 +799,8 @@ bool GameFlowUIBridge::install(std::string* error)
                 const UIFlowPayload& payload) {
                 const auto state = weak.lock();
                 if (!state || !state->installed) return;
-                const GameFlowDocument* document = state->gameFlow->document();
+                const GameFlowDocument* document =
+                    state->gameFlow->activeDocument();
                 const GameFlowIntentDefinition* target = document == nullptr
                     ? nullptr : document->findIntent(intentId);
                 if (target == nullptr) {
@@ -864,6 +819,68 @@ bool GameFlowUIBridge::install(std::string* error)
         _impl->subscriptions.push_back(subscription);
     }
 
+    _impl->gameReloadValidator = gameFlow.addReloadValidator(
+        [weak, config = _impl->config](
+            const GameFlowProgram& candidate,
+            const GameFlowActionRegistry& candidateRegistry,
+            std::string& error) {
+            const auto state = weak.lock();
+            if (!state || !state->installed) {
+                error.clear();
+                return true;
+            }
+            const UIFlowDocument* uiDocument = state->uiFlow->document();
+            std::string validationError;
+            if (uiDocument == nullptr) {
+                validationError =
+                    "UIFlow runtime is not loaded for the GameFlow bridge.";
+            } else if (validateBridgeContract(candidate, candidateRegistry,
+                           *uiDocument, config, validationError)) {
+                error.clear();
+                return true;
+            }
+            state->fail(
+                "GameFlow UI bridge rejected GameFlow reload: "
+                + std::move(validationError));
+            error = state->lastError;
+            return false;
+        });
+    if (_impl->gameReloadValidator == 0) {
+        return fail("Failed to register the GameFlow reload validator.");
+    }
+
+    _impl->uiDocumentValidator = uiFlow.addDocumentValidator(
+        [weak, config = _impl->config](
+            const UIFlowDocument& candidate,
+            std::string& error) {
+            const auto state = weak.lock();
+            if (!state || !state->installed) {
+                error.clear();
+                return true;
+            }
+            const GameFlowProgram* gameProgram = state->gameFlow->program();
+            const GameFlowActionRegistry* registry =
+                state->gameFlow->registry();
+            std::string validationError;
+            if (!state->gameFlow->ready()
+                || gameProgram == nullptr || registry == nullptr) {
+                validationError =
+                    "GameFlow runtime is not ready for the UI bridge.";
+            } else if (validateBridgeContract(*gameProgram, *registry,
+                           candidate, config, validationError)) {
+                error.clear();
+                return true;
+            }
+            state->fail(
+                "GameFlow UI bridge rejected UIFlow reload: "
+                + std::move(validationError));
+            error = state->lastError;
+            return false;
+        });
+    if (_impl->uiDocumentValidator == 0) {
+        return fail("Failed to register the UIFlow document validator.");
+    }
+
     _impl->state->installed = true;
     _impl->state->lastError.clear();
     if (error != nullptr) error->clear();
@@ -874,6 +891,16 @@ void GameFlowUIBridge::uninstall() noexcept
 {
     if (_impl == nullptr) return;
     _impl->state->installed = false;
+    if (_impl->gameReloadValidator != 0) {
+        (void)_impl->state->gameFlow->removeReloadValidator(
+            _impl->gameReloadValidator);
+        _impl->gameReloadValidator = 0;
+    }
+    if (_impl->uiDocumentValidator != 0) {
+        (void)_impl->state->uiFlow->removeDocumentValidator(
+            _impl->uiDocumentValidator);
+        _impl->uiDocumentValidator = 0;
+    }
     for (const auto subscription : _impl->subscriptions) {
         (void)_impl->state->uiFlow->unsubscribeSignal(subscription);
     }

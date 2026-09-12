@@ -348,6 +348,103 @@ TEST_CASE(reload_is_transactional_preserves_state_and_restores_bound_handlers)
     CHECK(runtime.currentState() == "reloaded");
 }
 
+TEST_CASE(program_reloaded_observer_sees_the_new_active_document)
+{
+    bool initiallyStarted = false;
+    auto prepared = prepareGameFlowRuntime(runtimeConfig(initiallyStarted));
+    CHECK_NOT_NULL(prepared.get());
+    if (prepared == nullptr) return;
+
+    RuntimeTestHost host;
+    GameFlowRuntime runtime(host, std::move(prepared));
+    CHECK(runtime.initialize());
+    runtime.update(0.0f);
+    CHECK(runtime.bindActionHandler("test.mark_started",
+        [](const GameFlowActionInvocation&) {
+            return GameFlowActionResult::succeeded();
+        }));
+
+    bool observed = false;
+    std::string observedFlowId;
+    bool observedReloadIntent = false;
+    bool observedReloadProgram = false;
+    bool observedRootDocument = false;
+    bool observedCandidateRegistry = false;
+    bool observedCandidatePath = false;
+    bool observerUnboundOldAction = false;
+    bool observerBoundCandidateAction = false;
+    GameFlowReloadResult nestedReload;
+    runtime.coordinator().setEventObserver(
+        [&](const GameFlowEvent& event) {
+            if (event.kind != GameFlowEventKind::ProgramReloaded) return;
+            observed = true;
+            const GameFlowProgram* program = runtime.program();
+            observedReloadProgram = program != nullptr
+                && program->rootFlowId == "runtime-startup";
+            const GameFlowDocument* root = runtime.document();
+            observedRootDocument = root != nullptr
+                && root->findIntent("reload.only") != nullptr;
+            const GameFlowActionRegistry* registry = runtime.registry();
+            observedCandidateRegistry = registry != nullptr
+                && registry->findAction("reload.marker") != nullptr;
+            observedCandidatePath =
+                runtime.documentPath() == reloadFixture().string();
+            const GameFlowDocument* active = runtime.activeDocument();
+            if (active == nullptr) return;
+            observedFlowId = active->id;
+            observedReloadIntent =
+                active->findIntent("reload.only") != nullptr;
+
+            observerUnboundOldAction =
+                runtime.unbindActionHandler("test.mark_started");
+            observerBoundCandidateAction = runtime.bindActionHandler(
+                "reload.marker",
+                [](const GameFlowActionInvocation&) {
+                    return GameFlowActionResult::succeeded();
+                });
+
+            bool nestedStarted = false;
+            auto nested = runtimeConfig(nestedStarted);
+            nested.documentPath = startupFixture().string();
+            nestedReload = runtime.reload(std::move(nested));
+        });
+
+    bool candidateStarted = false;
+    auto candidate = runtimeConfig(candidateStarted);
+    candidate.documentPath = reloadFixture().string();
+    const auto configureCandidate = std::move(candidate.configureRegistry);
+    candidate.configureRegistry =
+        [configureCandidate](GameFlowActionRegistry& registry,
+                             std::string& error) {
+            if (!configureCandidate(registry, error)) return false;
+            return registry.registerActionType(
+                {"reload.marker", {}, false}, false, &error);
+        };
+    const GameFlowReloadResult result = runtime.reload(std::move(candidate));
+
+    CHECK(result.state == GameFlowReloadState::Applied);
+    CHECK(observed);
+    CHECK(observedReloadProgram);
+    CHECK(observedRootDocument);
+    CHECK(observedCandidateRegistry);
+    CHECK(observedCandidatePath);
+    CHECK(observedFlowId == "runtime-startup");
+    CHECK(observedReloadIntent);
+    CHECK(observerUnboundOldAction);
+    CHECK(observerBoundCandidateAction);
+    CHECK(nestedReload.state == GameFlowReloadState::Rejected);
+    CHECK(nestedReload.message.find("already being applied")
+        != std::string::npos);
+    const GameFlowDocument* reloadedDocument = runtime.document();
+    CHECK_NOT_NULL(reloadedDocument);
+    if (reloadedDocument != nullptr) {
+        CHECK(reloadedDocument->findIntent("reload.only") != nullptr);
+    }
+    CHECK(runtime.registry()->findActionHandler("test.mark_started")
+        == nullptr);
+    CHECK(runtime.registry()->findActionHandler("reload.marker") != nullptr);
+}
+
 TEST_CASE(reload_waits_for_pending_transition_then_applies_at_safe_point)
 {
     GameFlowActionExecutionId pending = 0;

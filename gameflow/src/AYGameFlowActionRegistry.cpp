@@ -1,6 +1,7 @@
 #include <AYApplication/GameFlowActionRegistry.h>
 #include <AYApplication/GameFlowProgram.h>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <set>
@@ -50,7 +51,64 @@ bool validateFields(const std::vector<GameFlowFieldDefinition>& fields,
     return true;
 }
 
+bool validateReferences(const GameFlowActionTypeDefinition& definition,
+                        std::string& error)
+{
+    std::set<std::string, std::less<>> ids;
+    for (const auto& reference : definition.references) {
+        if (reference.argumentId.empty()) {
+            error = "Action reference argument id must not be empty.";
+            return false;
+        }
+        if (!ids.insert(reference.argumentId).second) {
+            error = "Duplicate action reference for argument '"
+                + reference.argumentId + "'.";
+            return false;
+        }
+        switch (reference.kind) {
+        case GameFlowReferenceKind::AssetPath:
+        case GameFlowReferenceKind::WorldId:
+        case GameFlowReferenceKind::UIFlowEntry:
+        case GameFlowReferenceKind::UIContext:
+        case GameFlowReferenceKind::UISignal:
+            break;
+        default:
+            error = "Action reference for argument '"
+                + reference.argumentId + "' has an invalid kind.";
+            return false;
+        }
+        const auto field = std::find_if(
+            definition.arguments.begin(), definition.arguments.end(),
+            [&](const GameFlowFieldDefinition& value) {
+                return value.id == reference.argumentId;
+            });
+        if (field == definition.arguments.end()) {
+            error = "Action reference names unknown argument '"
+                + reference.argumentId + "'.";
+            return false;
+        }
+        if (field->type != GameFlowValueType::String) {
+            error = "Action reference argument '" + reference.argumentId
+                + "' must be a string.";
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
+
+const char* gameFlowReferenceKindName(GameFlowReferenceKind value) noexcept
+{
+    switch (value) {
+    case GameFlowReferenceKind::AssetPath: return "asset";
+    case GameFlowReferenceKind::WorldId: return "world";
+    case GameFlowReferenceKind::UIFlowEntry: return "ui-entry";
+    case GameFlowReferenceKind::UIContext: return "ui-context";
+    case GameFlowReferenceKind::UISignal: return "ui-signal";
+    }
+    return "unknown";
+}
 
 GameFlowActionResult GameFlowActionResult::succeeded()
 {
@@ -123,8 +181,8 @@ bool GameFlowActionRegistry::registerActionType(
     } else if (isGameFlowControlAction(definition.id)) {
         validationError = "Action id '" + definition.id
             + "' is reserved by the GameFlow coordinator.";
-    } else {
-        validateFields(definition.arguments, validationError);
+    } else if (validateFields(definition.arguments, validationError)) {
+        validateReferences(definition, validationError);
     }
     if (!validationError.empty()) {
         if (error != nullptr) *error = std::move(validationError);
@@ -263,8 +321,8 @@ bool GameFlowActionRegistry::registerAction(
             + "' is reserved by the GameFlow coordinator.";
     } else if (!handler) {
         validationError = "Action handler must be callable.";
-    } else {
-        validateFields(definition.arguments, validationError);
+    } else if (validateFields(definition.arguments, validationError)) {
+        validateReferences(definition, validationError);
     }
     if (!validationError.empty()) {
         if (error != nullptr) *error = std::move(validationError);

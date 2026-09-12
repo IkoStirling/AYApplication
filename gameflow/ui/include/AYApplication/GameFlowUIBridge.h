@@ -1,6 +1,6 @@
 #pragma once
 
-#include <AYApplication/GameFlowActionRegistry.h>
+#include <AYApplication/GameFlowStandardActions.h>
 
 #include <memory>
 #include <string>
@@ -13,14 +13,6 @@ namespace ayt::app
 class GameFlowRuntime;
 class UIFlowRuntime;
 
-inline constexpr std::string_view kGameFlowActionUIFlowStart =
-    "ui.flow.start";
-inline constexpr std::string_view kGameFlowActionUIContextActivate =
-    "ui.context.activate";
-inline constexpr std::string_view kGameFlowActionUIContextDeactivate =
-    "ui.context.deactivate";
-inline constexpr std::string_view kGameFlowActionUISignalEmit =
-    "ui.signal.emit";
 inline constexpr std::string_view kUIFlowActionGameFlowRequest =
     "gameflow.request";
 
@@ -35,12 +27,6 @@ struct GameFlowUIBridgeConfig
     std::vector<GameFlowUISignalIntentBinding> signalBindings;
     bool enableRequestAction = true;
 };
-
-// Registers the authoring/runtime contracts without requiring a live UI.
-// Existing definitions are accepted only when their schemas match exactly.
-[[nodiscard]] bool registerGameFlowUIActionTypes(
-    GameFlowActionRegistry& registry,
-    std::string* error = nullptr);
 
 // Optional process-scoped bridge between two independently usable runtimes.
 // The referenced runtimes must outlive the bridge.

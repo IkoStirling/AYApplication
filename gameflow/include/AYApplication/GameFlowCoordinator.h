@@ -168,6 +168,9 @@ public:
 
     [[nodiscard]] std::string_view currentState() const noexcept;
     [[nodiscard]] std::string_view currentFlow() const noexcept;
+    [[nodiscard]] const GameFlowProgram* program() const noexcept;
+    [[nodiscard]] const GameFlowActionRegistry* registry() const noexcept;
+    [[nodiscard]] const GameFlowDocument* activeDocument() const noexcept;
     [[nodiscard]] std::string qualifiedState() const;
     [[nodiscard]] std::size_t callDepth() const noexcept;
     [[nodiscard]] std::string_view activeTransition() const noexcept;

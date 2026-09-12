@@ -128,9 +128,6 @@ GameFlowValue decodeValue(const json& value)
 {
     if (value.is_null()) return GameFlowValue{};
     if (value.is_boolean()) return GameFlowValue(value.get<bool>());
-    if (value.is_number_integer()) {
-        return GameFlowValue(value.get<std::int64_t>());
-    }
     if (value.is_number_unsigned()) {
         const auto number = value.get<std::uint64_t>();
         if (number > static_cast<std::uint64_t>(
@@ -138,6 +135,9 @@ GameFlowValue decodeValue(const json& value)
             throw std::runtime_error("Unsigned integer exceeds int64 range.");
         }
         return GameFlowValue(static_cast<std::int64_t>(number));
+    }
+    if (value.is_number_integer()) {
+        return GameFlowValue(value.get<std::int64_t>());
     }
     if (value.is_number_float()) return GameFlowValue(value.get<double>());
     if (value.is_string()) return GameFlowValue(value.get<std::string>());
@@ -155,6 +155,29 @@ GameFlowValue decodeValue(const json& value)
         return GameFlowValue(std::move(result));
     }
     throw std::runtime_error("Unsupported JSON value.");
+}
+
+std::int32_t decodePriority(const json& value)
+{
+    if (value.is_number_unsigned()) {
+        const auto number = value.get<std::uint64_t>();
+        if (number > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int32_t>::max())) {
+            throw std::runtime_error(
+                "'priority' is outside the signed 32-bit range.");
+        }
+        return static_cast<std::int32_t>(number);
+    }
+    if (value.is_number_integer()) {
+        const auto number = value.get<std::int64_t>();
+        if (number < std::numeric_limits<std::int32_t>::min()
+            || number > std::numeric_limits<std::int32_t>::max()) {
+            throw std::runtime_error(
+                "'priority' is outside the signed 32-bit range.");
+        }
+        return static_cast<std::int32_t>(number);
+    }
+    throw std::runtime_error("'priority' must be an integer.");
 }
 
 json encodeValue(const GameFlowValue& value)
@@ -519,7 +542,10 @@ bool GameFlowSerializer::deserialize(
                     value.value("onFailure", std::string{});
                 transition.onCancelState = value.value("onCancel", std::string{});
                 transition.timeoutSeconds = value.value("timeoutSeconds", 0.0);
-                transition.priority = value.value("priority", 0);
+                if (const auto priority = value.find("priority");
+                    priority != value.end()) {
+                    transition.priority = decodePriority(*priority);
+                }
                 if (value.contains("guard")) {
                     const auto& guard = value["guard"];
                     transition.guard.guard = guard.at("id").get<std::string>();

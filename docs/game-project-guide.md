@@ -53,7 +53,7 @@ ay_add_engine_for_game(
 所有应用 preset 应把 `VCPKG_INSTALLED_DIR` 指向引擎统一安装目录，例如：
 
 ```json
-"AY_VCPKG_INSTALLED_DIR": "${sourceDir}/../AliyatEngine/out/build/vcpkg_installed"
+"VCPKG_INSTALLED_DIR": "${sourceDir}/../AliyatEngine/out/build/vcpkg_installed"
 ```
 
 程序和资产用同一个 helper 声明：
@@ -94,13 +94,18 @@ ID 声明依赖；引擎在启动前统一检查缺失依赖和依赖环，再�
 
 `startupFlow` 是相对 `assetRoot` 的应用级流程入口。GameFlow 运行时由 GameLoop
 持有，因此替换 World 时不会被销毁。启动文档应声明 `app.start` intent；运行时完成
-初始化后会自动排队该 intent，首个 Ingress 更新再执行启动动作。最小启动流程如下：
+初始化后会自动排队该 intent，首个 Ingress 更新再执行启动动作。当前项目描述符不提供
+根流程参数或启动 intent 载荷，因此两者都必须能从空输入完成校验（必填字段需提供默认
+值）。内容验证器会按这条真实启动路径执行预检。最小启动流程如下：
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "application",
   "initialState": "boot",
+  "entryParameters": [],
+  "result": [],
+  "extensions": {},
   "intents": [
     { "id": "app.start" }
   ],
@@ -146,6 +151,56 @@ game.configureGameFlow = [](
 动作实现放在 `src/systems`，`game/MyGame.cpp` 只登记稳定 action ID、参数契约和
 处理器。这样以后增加编辑器节点图时，可以直接从同一份注册表生成节点端口和参数
 Inspector。
+
+### Subflow 资产
+
+大型流程使用 `flow.enter(subflowId, ...)` 调用另一个独立的
+`*.gameflow.json`，使用 `flow.return(...)` 把 typed result 返回给调用者。`subflowId`
+引用文档中的稳定 `id`，不引用文件名；运行时和内容验证器会在 `assetRoot` 下建立同一份
+确定性目录，拒绝重复 ID、递归调用、超过配置上限的调用深度和不匹配的参数/返回值。
+
+```json
+{
+  "id": "flow.enter",
+  "arguments": {
+    "subflowId": "new_game_setup",
+    "difficulty": "normal"
+  }
+}
+```
+
+编辑器坐标保存在 `extensions` 命名空间内，不参与运行时语义和确定性程序指纹。移动节点
+不会使 replay 失效；修改状态、transition、action、guard、默认值或 subflow 内容会改变
+程序指纹，并在回放开始时立即拒绝不匹配的记录。
+
+### 纯数据动作契约
+
+CI 和 Editor 无法调用游戏可执行文件中的 `configureGameFlow` 时，可在资产目录放置
+`gameflow.contract.json`，并在项目描述符的 `gameFlow.contract` 中登记。manifest 只描述
+动作/guard 的 typed 参数和资源引用，不包含 C++ 处理器：
+
+```json
+{
+  "schemaVersion": 1,
+  "actions": [
+    {
+      "id": "inventory.load_table",
+      "arguments": [
+        { "id": "path", "type": "string", "required": true }
+      ],
+      "references": [
+        { "argument": "path", "kind": "asset" }
+      ]
+    }
+  ],
+  "guards": []
+}
+```
+
+reference kind 支持 `asset`、`world`、`ui-entry`、`ui-context` 和 `ui-signal`。
+被标记参数必须是 string；验证器会拒绝绝对路径、`..`、符号链接越界、缺失文件和未知
+稳定 ID。manifest 与运行时 C++ 注册必须保持相同的 ID、字段、默认值、异步标志和引用
+metadata。
 
 ## 可选的 UIFlow 桥接
 
@@ -237,9 +292,17 @@ GameFlow 通过四个稳定 action 控制 UIFlow：
 | `ui.context.deactivate` | 通过 `activationId` 撤销之前的 Context 激活。 |
 | `ui.signal.emit` | 发出 `signalId`；数据来自触发当前 transition 的 intent payload，并按 UI Signal schema 过滤。 |
 
+`ui.flow.start` 的空 `entry` 使用 UIFlow 的 `defaultEntry`；两者都为空时只启动持久
+UIFlow runtime，不触发入口动作。这与运行时和内容验证器的语义一致。
+
 这些 UI action 会在 GameFlow 启动文档预检前注册，但处理器只在 UIFlow 运行时
 存在时安装。`AYApplicationGameFlowUI` 不在 headless 配置中生成；无窗口/服务器
 项目仍只依赖 GameFlow 核心，不会间接引入 AYUI。
+
+bridge 安装期间，单侧热重载必须继续满足当前另一侧的契约。若一次修改同时改变
+GameFlow 和 UIFlow 的共享 intent/context/signal 契约，当前版本没有成对原子提交 API；
+工具应先卸载 bridge，分别完成两侧 reload，再重新安装 bridge 进行整体验证。后续若
+编辑器需要无中断地提交这类成对修改，再增加 bridge 级 prepare/commit 事务。
 
 平台入口保持很薄：
 
@@ -311,6 +374,9 @@ GameFlow。正式流程应使用项目内声明的稳定 World ID。
   },
   "startupFlow": "flow/application.gameflow.json",
   "startupWorld": "main_menu",
+  "gameFlow": {
+    "contract": "gameflow.contract.json"
+  },
   "worlds": [
     {
       "id": "main_menu",
@@ -333,3 +399,34 @@ GameFlow。正式流程应使用项目内声明的稳定 World ID。
 引用后者。当前 UI 文件会被清单和验证器关联到 World；独立客户端的 World UI
 Overlay 生命周期尚未接入 `AYApplication`，在该能力完成前游戏代码不能假定它会
 随 World 自动显示。
+
+## 独立内容验证
+
+`AYProjectContentValidator` 使用与运行时相同的 GameFlow migration、registry 和 normalized
+program。它会扫描全部 GameFlow 草稿以发现损坏文件和重复 ID，并严格验证从
+`startupFlow` 可达的 subflow、action、guard、World、UIFlow entry/context/signal 和
+项目资产引用。输出的 dependency 行是确定性的，可供 CI 定位闭包来源。
+
+```powershell
+AYProjectContentValidator.exe <project-root> --profile headless
+AYProjectContentValidator.exe <project-root> --profile full-client
+AYProjectContentValidator.exe <project-root> --profile headless `
+  --gameflow-contract gameflow.contract.json
+```
+
+`headless` profile 不创建窗口或 widget。未编入 AYUI 的纯 headless 构建使用轻量 UIFlow
+契约读取；Editor 和完整客户端构建因具备 AYUI，会对两个 profile 都使用正式
+`UIFlowSerializer`。只有 `full-client` profile 会进一步构造 UI layout widget 树。两种
+profile 对 ID、payload type、默认值和路径边界给出一致结论。
+
+## 确定性录制与回放
+
+`AYApplicationGameFlow` 只依赖 `IGameFlowDeterminismExchange`，因此服务器和内容工具不会
+引入回放持久化模块。需要文件录制时链接可选的 `AYApplicationGameFlowReplay`，用
+`GameFlowReplayCaptureExchange` 或 `GameFlowReplayPlaybackExchange` 连接 AYReplay。
+记录包含程序指纹、intent/update 顺序、guard/action 结果、异步完成、取消和 subflow
+进出；回放时不再次调用有副作用的 action/guard/onCancel handler。
+
+当前适配器面向一段 AYReplay session。它不提供跨轮转文件 playlist，也没有单独的
+“必须消费到流尾” finalize API；调用方应保持外部 intent 与 update 的顺序/内容一致，并在
+完整 session 边界结束验证。程序指纹不覆盖原生 C++ handler 的实现变化。

@@ -15,6 +15,7 @@ namespace ayt::app
 inline constexpr std::string_view kGameFlowActionEnter = "flow.enter";
 inline constexpr std::string_view kGameFlowActionReturn = "flow.return";
 inline constexpr std::string_view kGameFlowSubflowIdArgument = "subflowId";
+inline constexpr std::string_view kGameFlowDefaultStartupIntent = "app.start";
 
 [[nodiscard]] bool isGameFlowControlAction(
     std::string_view actionId) noexcept;

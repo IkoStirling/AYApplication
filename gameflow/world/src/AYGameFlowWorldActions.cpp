@@ -17,16 +17,6 @@ namespace ayt::app
 namespace
 {
 
-bool compatibleWorldReplaceType(const GameFlowActionTypeDefinition& definition)
-{
-    return definition.id == kGameFlowActionWorldReplace
-        && definition.asynchronous
-        && definition.arguments.size() == 1u
-        && definition.arguments[0].id == "worldId"
-        && definition.arguments[0].type == GameFlowValueType::String
-        && definition.arguments[0].required;
-}
-
 std::string failureMessage(const IGameWorldRouter& router,
                            const IRuntimeSceneLoader& loader)
 {
@@ -275,31 +265,6 @@ void GameFlowWorldActionAdapter::uninstall() noexcept
 bool GameFlowWorldActionAdapter::installed() const noexcept
 {
     return _impl != nullptr && _impl->state->installed;
-}
-
-bool registerGameFlowWorldActionType(
-    GameFlowActionRegistry& registry,
-    std::string* error)
-{
-    const auto* existing = registry.findAction(kGameFlowActionWorldReplace);
-    if (existing != nullptr) {
-        if (compatibleWorldReplaceType(*existing)) {
-            if (error != nullptr) error->clear();
-            return true;
-        }
-        if (error != nullptr) {
-            *error = "Existing world.replace action type is incompatible.";
-        }
-        return false;
-    }
-
-    GameFlowActionTypeDefinition definition;
-    definition.id = std::string(kGameFlowActionWorldReplace);
-    definition.arguments = {{
-        "worldId", GameFlowValueType::String, true, {}}};
-    definition.asynchronous = true;
-    return registry.registerActionType(
-        std::move(definition), false, error);
 }
 
 std::uint64_t GameFlowWorldActionAdapter::pendingSceneRequestId() const noexcept

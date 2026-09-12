@@ -1966,6 +1966,22 @@ std::string_view GameFlowCoordinator::currentFlow() const noexcept
             _impl->frames.back().plan->document.id);
 }
 
+const GameFlowProgram* GameFlowCoordinator::program() const noexcept
+{
+    return _impl->program;
+}
+
+const GameFlowActionRegistry* GameFlowCoordinator::registry() const noexcept
+{
+    return _impl->registry;
+}
+
+const GameFlowDocument* GameFlowCoordinator::activeDocument() const noexcept
+{
+    return _impl->frames.empty()
+        ? nullptr : &_impl->frames.back().plan->document;
+}
+
 std::string GameFlowCoordinator::qualifiedState() const
 {
     if (_impl->frames.empty()) return {};

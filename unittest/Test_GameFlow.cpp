@@ -84,6 +84,11 @@ GameFlowPlan buildMainPlan(const GameFlowActionRegistry& registry)
 
 TEST_SUITE(GameFlowDocumentTests)
 
+TEST_CASE(source_abi_tracks_the_public_action_metadata_layout)
+{
+    CHECK(kGameFlowSourceAbiVersion == 2u);
+}
+
 TEST_CASE(schema_v1_fixture_round_trips_without_losing_contract_data)
 {
     GameFlowDocument document;
@@ -116,6 +121,75 @@ TEST_CASE(schema_v1_fixture_round_trips_without_losing_contract_data)
     CHECK(decoded.transitions[1].onFailureState == "load_error");
     CHECK(decoded.intents[1].payload[0].defaultValue
         == GameFlowValue(std::int64_t{0}));
+}
+
+TEST_CASE(json_values_reject_unsigned_integers_outside_int64_range)
+{
+    constexpr std::string_view document = R"json({
+      "schemaVersion": 2,
+      "id": "integer-range",
+      "initialState": "idle",
+      "entryParameters": [{
+        "id": "slot",
+        "type": "integer",
+        "required": false,
+        "default": 18446744073709551615
+      }],
+      "result": [],
+      "extensions": {},
+      "intents": [],
+      "states": [{ "id": "idle" }],
+      "transitions": []
+    })json";
+    GameFlowDocument decoded;
+    std::vector<GameFlowDiagnostic> diagnostics;
+    CHECK_FALSE(GameFlowSerializer::deserialize(
+        document, decoded, &diagnostics));
+    CHECK_FALSE(diagnostics.empty());
+}
+
+TEST_CASE(transition_priority_requires_an_exact_signed_32_bit_integer)
+{
+    const auto documentWithPriority = [](std::string_view priority) {
+        std::string document = R"json({
+          "schemaVersion": 2,
+          "id": "priority-range",
+          "initialState": "idle",
+          "entryParameters": [],
+          "result": [],
+          "extensions": {},
+          "intents": [{ "id": "go" }],
+          "states": [{ "id": "idle" }, { "id": "done" }],
+          "transitions": [{
+            "id": "go",
+            "from": "idle",
+            "intent": "go",
+            "to": "done",
+            "priority": __PRIORITY__
+          }]
+        })json";
+        const auto marker = document.find("__PRIORITY__");
+        document.replace(marker, std::string("__PRIORITY__").size(), priority);
+        return document;
+    };
+
+    for (const std::string_view invalid : {
+             "1.5", "2147483648", "-2147483649",
+             "18446744073709551615"}) {
+        GameFlowDocument decoded;
+        std::vector<GameFlowDiagnostic> diagnostics;
+        CHECK_FALSE(GameFlowSerializer::deserialize(
+            documentWithPriority(invalid), decoded, &diagnostics));
+        CHECK_FALSE(diagnostics.empty());
+    }
+
+    for (const std::string_view valid : {"2147483647", "-2147483648"}) {
+        GameFlowDocument decoded;
+        std::vector<GameFlowDiagnostic> diagnostics;
+        CHECK(GameFlowSerializer::deserialize(
+            documentWithPriority(valid), decoded, &diagnostics));
+        CHECK(diagnostics.empty());
+    }
 }
 
 TEST_CASE(raw_schema_migration_is_idempotent_and_reports_each_step)
@@ -246,6 +320,22 @@ TEST_CASE(authoring_can_register_and_enumerate_types_without_runtime_handlers)
     CHECK(registry.actionTypes().size() == 1u);
     CHECK(registry.actionTypes()[0].id == "world.replace");
     CHECK(registry.guardTypes().size() == 1u);
+}
+
+TEST_CASE(action_reference_metadata_rejects_unknown_reference_kinds)
+{
+    GameFlowActionRegistry registry;
+    GameFlowActionTypeDefinition definition{
+        "asset.open",
+        {{"path", GameFlowValueType::String, true, {}}},
+        false,
+        {{"path", static_cast<GameFlowReferenceKind>(0xffu), false}},
+    };
+    std::string error;
+    CHECK_FALSE(registry.registerActionType(
+        std::move(definition), false, &error));
+    CHECK(error.find("invalid kind") != std::string::npos);
+    CHECK(registry.findAction("asset.open") == nullptr);
 }
 
 TEST_CASE(normalized_transition_order_is_priority_then_document_order)
