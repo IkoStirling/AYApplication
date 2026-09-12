@@ -1,0 +1,17 @@
+{
+  "root": {
+    "type": "Panel",
+    "id": "notification_root",
+    "size": { "w": 1280, "h": 720 },
+    "backgroundEnabled": false,
+    "children": [
+      {
+        "type": "TextLabel",
+        "id": "notification_text",
+        "position": { "x": 930, "y": 36 },
+        "size": { "w": 300, "h": 52 },
+        "text": "Quest updated"
+      }
+    ]
+  }
+}

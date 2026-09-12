@@ -1,0 +1,32 @@
+{
+  "root": {
+    "type": "Panel",
+    "id": "pause_root",
+    "size": { "w": 1280, "h": 720 },
+    "backgroundEnabled": false,
+    "children": [
+      {
+        "type": "TextLabel",
+        "id": "pause_title",
+        "position": { "x": 520, "y": 180 },
+        "size": { "w": 240, "h": 48 },
+        "text": "Paused"
+      },
+      {
+        "type": "TextInput",
+        "id": "pause_name",
+        "position": { "x": 480, "y": 260 },
+        "size": { "w": 320, "h": 44 },
+        "text": ""
+      },
+      {
+        "type": "Button",
+        "id": "pause_resume",
+        "position": { "x": 520, "y": 340 },
+        "size": { "w": 240, "h": 56 },
+        "text": "Resume",
+        "events": { "onClick": "resumeGame" }
+      }
+    ]
+  }
+}

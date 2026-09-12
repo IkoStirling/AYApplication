@@ -1,0 +1,6 @@
+scenario=vertical_parallel_modal
+frame=64
+framebuffer=1280x720
+backend=d3d11
+drawCalls=10
+queued=yes

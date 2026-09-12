@@ -1,0 +1,16 @@
+{
+  "root": {
+    "type": "Panel",
+    "id": "game_root",
+    "size": { "w": 1280, "h": 720 },
+    "children": [
+      {
+        "type": "TextLabel",
+        "id": "game_status",
+        "position": { "x": 520, "y": 24 },
+        "size": { "w": 240, "h": 32 },
+        "text": "World presentation"
+      }
+    ]
+  }
+}

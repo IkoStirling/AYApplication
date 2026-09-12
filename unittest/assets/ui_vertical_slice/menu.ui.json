@@ -1,0 +1,24 @@
+{
+  "root": {
+    "type": "Panel",
+    "id": "menu_root",
+    "size": { "w": 1280, "h": 720 },
+    "children": [
+      {
+        "type": "TextLabel",
+        "id": "menu_title",
+        "position": { "x": 440, "y": 180 },
+        "size": { "w": 400, "h": 64 },
+        "text": "ALIYAT"
+      },
+      {
+        "type": "Button",
+        "id": "menu_start",
+        "position": { "x": 520, "y": 310 },
+        "size": { "w": 240, "h": 64 },
+        "text": "Start Game",
+        "events": { "onClick": "startGame" }
+      }
+    ]
+  }
+}

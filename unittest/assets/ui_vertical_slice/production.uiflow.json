@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "id": "production-ui-vertical-slice",
+  "defaultEntry": "boot",
+  "layers": [
+    { "id": "application", "order": 0, "input": "consumeHandled", "blocksLowerInput": false, "maxActiveScreens": 1 },
+    { "id": "hud", "order": 100, "input": "passThrough", "blocksLowerInput": false, "maxActiveScreens": 1 },
+    { "id": "story", "order": 200, "input": "consumeHandled", "blocksLowerInput": false, "maxActiveScreens": 1 },
+    { "id": "notice", "order": 300, "input": "passThrough", "blocksLowerInput": false, "maxActiveScreens": 1 },
+    { "id": "modal", "order": 400, "input": "blockLower", "blocksLowerInput": true, "maxActiveScreens": 1 }
+  ],
+  "slots": [
+    { "id": "application.main", "layer": "application", "capacity": 1, "restorePrevious": true },
+    { "id": "hud.main", "layer": "hud", "capacity": 1, "restorePrevious": true },
+    { "id": "story.main", "layer": "story", "capacity": 1, "restorePrevious": true },
+    { "id": "notice.main", "layer": "notice", "capacity": 1, "restorePrevious": true },
+    { "id": "modal.main", "layer": "modal", "capacity": 1, "restorePrevious": true }
+  ],
+  "screens": [
+    {
+      "id": "menu", "layout": "menu.ui.json", "layer": "application",
+      "slot": "application.main", "scope": "application",
+      "events": [{ "handler": "startGame", "signal": "game.start" }]
+    },
+    {
+      "id": "game", "layout": "game.ui.json", "layer": "application",
+      "slot": "application.main", "scope": "application"
+    },
+    {
+      "id": "hud", "layout": "hud.ui.json", "layer": "hud",
+      "slot": "hud.main", "scope": "world",
+      "events": [{ "handler": "probeHud", "signal": "hud.clicked" }]
+    },
+    {
+      "id": "dialogue", "layout": "dialogue.ui.json", "layer": "story",
+      "slot": "story.main", "scope": "world",
+      "enterAnimation": "dialogue.enter", "exitAnimation": "dialogue.exit"
+    },
+    {
+      "id": "notification", "layout": "notification.ui.json", "layer": "notice",
+      "slot": "notice.main", "scope": "application"
+    },
+    {
+      "id": "pause", "layout": "pause.ui.json", "layer": "modal",
+      "slot": "modal.main", "scope": "application",
+      "events": [{ "handler": "resumeGame", "signal": "pause.close" }]
+    }
+  ],
+  "contexts": [
+    { "id": "Menu", "priority": 0, "slots": [{ "slot": "application.main", "operation": "present", "screen": "menu" }] },
+    { "id": "Game", "priority": 0, "slots": [{ "slot": "application.main", "operation": "present", "screen": "game" }] },
+    { "id": "WorldHud", "priority": 0, "slots": [{ "slot": "hud.main", "operation": "present", "screen": "hud" }] },
+    { "id": "Dialogue", "priority": 10, "slots": [{ "slot": "story.main", "operation": "present", "screen": "dialogue" }] },
+    { "id": "Notice", "priority": 20, "slots": [{ "slot": "notice.main", "operation": "present", "screen": "notification" }] },
+    { "id": "Pause", "priority": 100, "slots": [{ "slot": "modal.main", "operation": "present", "screen": "pause" }] }
+  ],
+  "entries": [{ "id": "boot", "contexts": [] }],
+  "signals": [
+    { "id": "game.start" },
+    { "id": "hud.clicked" },
+    { "id": "zone.enter" },
+    { "id": "zone.exit" },
+    { "id": "notice.show" },
+    { "id": "notice.hide" },
+    { "id": "pause.open" },
+    { "id": "pause.close" },
+    { "id": "scene.currentChanged" },
+    { "id": "scene.beginPlay" },
+    { "id": "scene.endPlay" }
+  ],
+  "regions": [
+    {
+      "id": "application", "initialState": "menu",
+      "states": [
+        { "id": "menu", "contexts": ["Menu"] },
+        { "id": "game", "contexts": ["Game"] }
+      ]
+    },
+    {
+      "id": "story", "initialState": "idle",
+      "states": [
+        { "id": "idle" },
+        { "id": "visible", "contexts": ["Dialogue"] }
+      ]
+    },
+    {
+      "id": "notice", "initialState": "hidden",
+      "states": [
+        { "id": "hidden" },
+        { "id": "visible", "contexts": ["Notice"] }
+      ]
+    },
+    {
+      "id": "modal", "initialState": "playing",
+      "states": [
+        { "id": "playing" },
+        { "id": "paused", "contexts": ["Pause"] }
+      ]
+    }
+  ],
+  "transitions": [
+    { "id": "application.start", "region": "application", "from": "menu", "to": "game", "trigger": "game.start" },
+    { "id": "story.enter", "region": "story", "from": "idle", "to": "visible", "trigger": "zone.enter", "interrupt": "reversePrevious" },
+    { "id": "story.exit", "region": "story", "from": "visible", "to": "idle", "trigger": "zone.exit", "interrupt": "reversePrevious" },
+    { "id": "notice.show", "region": "notice", "from": "hidden", "to": "visible", "trigger": "notice.show" },
+    { "id": "notice.hide", "region": "notice", "from": "visible", "to": "hidden", "trigger": "notice.hide" },
+    { "id": "pause.open", "region": "modal", "from": "playing", "to": "paused", "trigger": "pause.open" },
+    { "id": "pause.close", "region": "modal", "from": "paused", "to": "playing", "trigger": "pause.close" }
+  ]
+}

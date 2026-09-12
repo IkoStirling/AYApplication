@@ -1,0 +1,6 @@
+scenario=vertical_boot
+frame=12
+framebuffer=1280x720
+backend=d3d11
+drawCalls=6
+queued=yes

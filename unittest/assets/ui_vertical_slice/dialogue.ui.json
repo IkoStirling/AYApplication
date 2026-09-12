@@ -1,0 +1,53 @@
+{
+  "animations": [
+    {
+      "name": "dialogue.enter",
+      "tracks": [
+        {
+          "target": "dialogue_card",
+          "property": "opacity",
+          "keyframes": [
+            { "timeMs": 0, "value": 0.0, "curve": "linear" },
+            { "timeMs": 150, "value": 1.0, "curve": "linear" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "dialogue.exit",
+      "tracks": [
+        {
+          "target": "dialogue_card",
+          "property": "opacity",
+          "keyframes": [
+            { "timeMs": 0, "value": 1.0, "curve": "linear" },
+            { "timeMs": 120, "value": 0.0, "curve": "linear" }
+          ]
+        }
+      ]
+    }
+  ],
+  "root": {
+    "type": "Panel",
+    "id": "dialogue_root",
+    "size": { "w": 1280, "h": 720 },
+    "backgroundEnabled": false,
+    "children": [
+      {
+        "type": "Panel",
+        "id": "dialogue_card",
+        "position": { "x": 220, "y": 500 },
+        "size": { "w": 840, "h": 150 },
+        "children": [
+          {
+            "type": "TextLabel",
+            "id": "dialogue_text",
+            "position": { "x": 28, "y": 28 },
+            "size": { "w": 784, "h": 88 },
+            "text": "The gate reacts to a Scene signal."
+          }
+        ]
+      }
+    ]
+  }
+}

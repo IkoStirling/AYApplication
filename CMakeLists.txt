@@ -477,6 +477,70 @@ if(BUILD_TESTING AND
         endif()
         ay_add_test(UIFlowRuntimeTest LABELS "ui-flow;ayapplication")
 
+        # Asset-driven production vertical slice. Keep this in a dedicated
+        # process so UIManager, Flow runtime, Scene lifetime and scripted
+        # AYDevice events cannot inherit state from broad unit-test suites.
+        add_executable(UIProductionVerticalSliceTest
+            unittest/TestMain.cpp
+            unittest/Test_UIProductionVerticalSlice.cpp
+        )
+        target_link_libraries(UIProductionVerticalSliceTest PRIVATE
+            AYApplicationUI
+            AYEntityCore
+            AYScene
+            AYTest
+            nlohmann_json::nlohmann_json
+        )
+        target_compile_options(UIProductionVerticalSliceTest PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>: /W4>
+            $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+        )
+        target_compile_definitions(UIProductionVerticalSliceTest PRIVATE
+            AY_UI_VERTICAL_SLICE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/unittest/assets/ui_vertical_slice"
+            AY_UI_VERTICAL_SLICE_OUTPUT_ROOT="${CMAKE_CURRENT_BINARY_DIR}/ui-production-vertical-slice-output"
+        )
+        if(MSVC)
+            target_link_options(UIProductionVerticalSliceTest PRIVATE
+                "/FORCE:MULTIPLE"
+                "/IGNORE:4005"
+                "/IGNORE:4006")
+        endif()
+        ay_add_test(UIProductionVerticalSliceTest
+            LABELS "ui-flow;vertical-slice;production;ayapplication")
+
+        if(WIN32 AND TARGET AYRenderer AND TARGET AYDevice)
+            add_executable(UIProductionVerticalSliceVisual WIN32
+                tools/ui_vertical_slice_visual/main.cpp
+            )
+            target_link_libraries(UIProductionVerticalSliceVisual PRIVATE
+                AYApplicationUI
+                AYRenderer
+                AYDevice
+                AYScene
+            )
+            target_compile_definitions(UIProductionVerticalSliceVisual PRIVATE
+                NOMINMAX
+                WIN32_LEAN_AND_MEAN
+                AY_UI_VERTICAL_SLICE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/unittest/assets/ui_vertical_slice"
+                AY_UI_VERTICAL_SLICE_CAPTURE_ROOT="${CMAKE_CURRENT_BINARY_DIR}/ui-production-vertical-slice-captures"
+            )
+            target_compile_options(UIProductionVerticalSliceVisual PRIVATE
+                $<$<CXX_COMPILER_ID:MSVC>: /W4 /Zc:__cplusplus /Zc:preprocessor>
+            )
+            target_link_libraries(UIProductionVerticalSliceVisual PRIVATE
+                user32 gdi32)
+
+            add_custom_target(UIProductionVerticalSliceGoldenRegression
+                COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                    -File ${CMAKE_CURRENT_SOURCE_DIR}/tools/ui_vertical_slice_visual/RunGoldenRegression.ps1
+                    -VisualExe $<TARGET_FILE:UIProductionVerticalSliceVisual>
+                    -OutputDir ${CMAKE_CURRENT_BINARY_DIR}/ui-production-vertical-slice-golden-output
+                DEPENDS UIProductionVerticalSliceVisual
+                USES_TERMINAL
+                COMMENT "Run the real-window UI production vertical-slice golden regression"
+            )
+        endif()
+
         add_executable(GameFlowUITest
             unittest/TestMain.cpp
             unittest/Test_GameFlowUI.cpp

@@ -10,6 +10,7 @@ AYApplication 是引擎 Host 装配层，负责应用启动、子系统注册、
 | `AYApplication` | 客户端/编辑器通用 Host、默认模块与场景生命周期 |
 | `AYApplicationGameFlow` | 无 UI 的应用流程文档、校验、标准化计划与运行时协调器 |
 | `AYApplicationGameFlowWorld` | 可选的 `world.replace` GameFlow/World 生命周期适配器 |
+| `AYApplicationUI` | 可选的 UI Flow、Scene bridge、Screen host 与交互编排 |
 | `AYOnlineContent` | 后端内容身份到可信本地场景的精确版本映射 |
 | `AYOnlineApplication` | 客户端 Online Flow 与运行时场景加载桥接 |
 | `AYDedicatedApplication` | Dedicated allocation 与真实 `Scene/World` 的权威端桥接 |
@@ -153,6 +154,22 @@ ctest --test-dir out/build/windows-debug-vs2026-insider `
 `DedicatedOnlineVerticalSliceTest` 使用真实 GNS listener 和两个客户端，覆盖
 allocation、逐玩家准入、真实场景 tick、首名玩家离开后的席位保持，以及最后
 一名玩家离开后的世界释放。
+
+UI 生产纵向门禁分为两个独立进程：
+
+```powershell
+cmake --build --preset windows-debug-vs2026-insider `
+  --target UIProductionVerticalSliceTest `
+           UIProductionVerticalSliceGoldenRegression `
+  --parallel 1
+```
+
+`UIProductionVerticalSliceTest` 从真实 `.uiflow.json` 与 `.ui.json` 资产启动，使用
+AYDevice 事件桥覆盖菜单进入、Scene HUD、区域触发、并行层、模态输入阻断、IME
+提交和 150% DPI，并写出确定性 `trace.json`。Windows D3D11 golden 目标在隐藏的
+独立窗口中捕获启动、Gameplay 和五 Screen 并行模态三张 1280×720 TGA；比较允许
+单通道误差 2、变化像素不超过 0.05%。常规回归无需人工观察，只有有意更新 golden
+或判断新的视觉设计是否可接受时才需要人工确认。
 
 ## 当前限制与下一步
 

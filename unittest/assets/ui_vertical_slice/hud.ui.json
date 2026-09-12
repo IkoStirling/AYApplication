@@ -1,0 +1,27 @@
+{
+  "root": {
+    "type": "Panel",
+    "id": "hud_root",
+    "size": { "w": 1280, "h": 720 },
+    "backgroundEnabled": false,
+    "children": [
+      {
+        "type": "ProgressBar",
+        "id": "hud_health",
+        "position": { "x": 32, "y": 32 },
+        "size": { "w": 260, "h": 22 },
+        "min": 0,
+        "max": 100,
+        "value": 75
+      },
+      {
+        "type": "Button",
+        "id": "hud_probe",
+        "position": { "x": 32, "y": 72 },
+        "size": { "w": 160, "h": 40 },
+        "text": "HUD Action",
+        "events": { "onClick": "probeHud" }
+      }
+    ]
+  }
+}

@@ -1284,6 +1284,18 @@ property、default 与 value link 的最终 inputs；started/completed trace 分
 运行逻辑。单步遇到异步节点时等待真实 continuation，再在下一个 ready 节点暂停；interrupt、reset、
 document replacement 和 graph finish 都清除关联暂停状态，避免悬空调试快照。
 
+阶段十二建立生产 UI 纵向验收门禁。`UIProductionVerticalSliceTest` 在独立进程中加载真实 Flow/Layout
+资产，通过 `DeviceInputBridge` 回放 AYDevice 输入，覆盖菜单进入、Scene bridge 挂载 World HUD、区域
+驱动的动画中断与重入、五个 Screen 并行、Modal 阻断及恢复、IME composition/UTF-8 commit、Scene
+替换清理和 150% DPI 物理坐标点击。循环内只累计失败，末尾统一断言，并输出包含 Region、Screen、
+World 与 effective scale 的确定性 trace。
+
+Windows 视觉门禁由 `UIProductionVerticalSliceVisual` 在隐藏的 D3D11 窗口中使用同一资产和输入路径绘制，
+`UIProductionVerticalSliceGoldenRegression` 比较 boot、gameplay、parallel-modal 三个未压缩 TGA。覆盖层
+夹具使用透明根容器，使并行 Screen 可在同一帧被观察；Modal 的输入硬边界由功能测试单独验证。基线
+容许单通道 2 级量化误差且变化像素上限为 0.05%。测试工具在 bgfx 原始 TGA 落盘后自行生成 PNG 预览，
+不依赖异步 PNG sidecar 的时序。常规 CI/本机复测无需人工操作；仅有意更新基线及视觉设计评审需人工确认。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. GameFlow 应用流程核心
