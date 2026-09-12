@@ -224,6 +224,31 @@ target_compile_options(AYApplicationGameFlowWorld PRIVATE
 # adapter target consumes only public Host interfaces, so this edge is acyclic.
 target_link_libraries(${PROJECT_NAME} PRIVATE AYApplicationGameFlowWorld)
 
+# Optional client bridge. The target is absent from headless configurations,
+# keeping GameFlow core and World routing free of AYUI dependencies.
+if(TARGET AYApplicationUI)
+    add_library(AYApplicationGameFlowUI STATIC
+        gameflow/ui/src/AYGameFlowUIBridge.cpp
+        gameflow/ui/src/AYGameFlowUIBridgeModule.cpp
+        gameflow/ui/include/AYApplication/GameFlowUIBridge.h
+        gameflow/ui/include/AYApplication/GameFlowUIBridgeModule.h
+        AYApplicationGameFlowUI.h
+    )
+    target_include_directories(AYApplicationGameFlowUI PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/gameflow/ui/include
+    )
+    target_link_libraries(AYApplicationGameFlowUI PUBLIC
+        AYApplicationGameFlowWorld
+        AYApplicationUI
+    )
+    target_compile_features(AYApplicationGameFlowUI PUBLIC cxx_std_23)
+    target_compile_options(AYApplicationGameFlowUI PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+    )
+endif()
+
 if(BUILD_TESTING)
     add_executable(GameFlowCoreTest
         unittest/TestMain.cpp
@@ -446,6 +471,22 @@ if(BUILD_TESTING AND
                 "/IGNORE:4006")
         endif()
         ay_add_test(UIFlowRuntimeTest LABELS "ui-flow;ayapplication")
+
+        add_executable(GameFlowUITest
+            unittest/TestMain.cpp
+            unittest/Test_GameFlowUI.cpp
+        )
+        target_link_libraries(GameFlowUITest PRIVATE
+            AYApplicationGameFlowUI
+            AYTest
+        )
+        target_compile_options(GameFlowUITest PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>: /W4>
+            $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+        )
+        target_compile_definitions(GameFlowUITest PRIVATE
+            AY_APPLICATION_GAMEFLOW_TEST_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/unittest/assets")
+        ay_add_test(GameFlowUITest LABELS "game-flow;ui-flow;ayapplication")
     endif()
 endif()
 

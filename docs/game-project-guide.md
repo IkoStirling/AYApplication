@@ -21,6 +21,7 @@ MyGame/
 │   └── systems/                # 游戏 SubSystem / ECS system
 ├── Assets/
 │   ├── flow/                   # 应用级 .gameflow.json
+│   ├── ui/                     # .uiflow.json 与 Screen .ui.json
 │   └── worlds/                 # .ayscene 文件
 ├── project.ayproject.json      # Editor/工具读取的项目、World 与运行清单
 └── tests/                      # 游戏规则和装配验证
@@ -145,6 +146,100 @@ game.configureGameFlow = [](
 动作实现放在 `src/systems`，`game/MyGame.cpp` 只登记稳定 action ID、参数契约和
 处理器。这样以后增加编辑器节点图时，可以直接从同一份注册表生成节点端口和参数
 Inspector。
+
+## 可选的 UIFlow 桥接
+
+客户端可以链接 `AYApplicationGameFlowUI` 将 UIFlow 和 GameFlow 组装起来，并包含
+`AYApplicationGameFlowUI.h`。项目先在 `configureModules` 中注册
+`UIFlowRuntimeModule`，再调用 `enableGameFlowUIBridge`；该 helper 会保留已有的模块
+配置回调，并在其后追加桥接模块。
+
+```cpp
+#include <AYApplicationGameFlowUI.h>
+
+game.configureModules = [](ayt::app::EngineModuleRuntime& runtime) {
+    auto uiDocument = loadApplicationUIFlow();       // 项目内加载并解析 .uiflow.json
+    auto screenHost = makeApplicationScreenHost();   // 项目内绑定已初始化的 UIManager
+    return runtime.modules().emplace<ayt::app::UIFlowRuntimeModule>(
+        runtime.context().host(),
+        std::move(uiDocument),
+        std::move(screenHost));
+};
+
+ayt::app::enableGameFlowUIBridge(game, {
+    .signalBindings = {
+        {"ui.start_game", "menu.start"},
+    },
+});
+```
+
+`loadApplicationUIFlow` 和 `makeApplicationScreenHost` 是示例中的项目 helper：前者使用
+`UIFlowSerializer` 读取项目的 `.uiflow.json`，后者通常返回绑定已初始化
+`UIManager` 的 `UIManagerFlowScreenHost`。它们需要由客户端组装层实现。
+
+UI 按钮不应直接打开 Scene。Screen 的 `.ui.json` 只把点击绑定到稳定
+handler，UIFlow 再把 handler 声明为稳定 Signal：
+
+`main_menu.ui.json` 中的按钮片段：
+
+```json
+{ "events": { "onClick": "startGame" } }
+```
+
+`application.uiflow.json` 中的 Screen 与 Signal 片段：
+
+```json
+{
+  "screens": [
+    {
+      "id": "main_menu",
+      "events": [
+        { "handler": "startGame", "signal": "ui.start_game" }
+      ]
+    }
+  ],
+  "signals": [
+    { "id": "ui.start_game" }
+  ]
+}
+```
+
+`signalBindings` 明确指定 `signalId -> intentId`；桥接会在安装时同时校验 Signal、
+intent 和 payload schema。因此重命 UI Signal 或 GameFlow intent 时会在启动阶段失败，
+不会在按钮点击后静默路由到错误目标。当前按钮 command 不携带动态 payload；
+这类 Signal 的必填字段需要在 UIFlow 中提供默认值，或由游戏系统显式发出带参 Signal。
+
+UIFlow 也可以通过 host action 主动请求 GameFlow intent。默认桥接会为
+`gameflow.request` 安装处理器，但 UIFlow 仍必须在文档的 `actions` 中声明该
+action 及其输入契约，否则 `invokeAction` 会拒绝调用：
+
+```json
+"actions": [
+  {
+    "id": "gameflow.request",
+    "inputs": [
+      { "id": "intent", "type": "string", "required": true }
+    ]
+  }
+]
+```
+
+额外输入会按目标 intent 的 payload schema 过滤和校验；应同时在 action 的
+`inputs` 中声明它们，以便 UIFlow 完成类型检查和节点端口生成。只需要 Signal 映射的项目可以
+在桥接配置中设置 `enableRequestAction = false`，并省略该 action 声明。
+
+GameFlow 通过四个稳定 action 控制 UIFlow：
+
+| Action | 用途 |
+|---|---|
+| `ui.flow.start` | 从可选 `entry` 启动 UIFlow。 |
+| `ui.context.activate` | 使用稳定 `activationId` 激活 `contextId`，可选指定 `scope` 和 `scopeKey`。 |
+| `ui.context.deactivate` | 通过 `activationId` 撤销之前的 Context 激活。 |
+| `ui.signal.emit` | 发出 `signalId`；数据来自触发当前 transition 的 intent payload，并按 UI Signal schema 过滤。 |
+
+这些 UI action 会在 GameFlow 启动文档预检前注册，但处理器只在 UIFlow 运行时
+存在时安装。`AYApplicationGameFlowUI` 不在 headless 配置中生成；无窗口/服务器
+项目仍只依赖 GameFlow 核心，不会间接引入 AYUI。
 
 平台入口保持很薄：
 

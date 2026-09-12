@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "id": "gameflow-ui-bridge",
+  "initialState": "boot",
+  "intents": [
+    { "id": "app.start" },
+    {
+      "id": "menu.start",
+      "payload": [
+        { "id": "difficulty", "type": "string", "required": true },
+        { "id": "players", "type": "integer", "default": 1 }
+      ]
+    },
+    { "id": "overlay.show" },
+    { "id": "overlay.hide" },
+    {
+      "id": "ui.notice",
+      "payload": [
+        { "id": "message", "type": "string", "required": true },
+        { "id": "code", "type": "integer", "default": 0 }
+      ]
+    }
+  ],
+  "states": [
+    { "id": "boot" },
+    { "id": "ready" },
+    { "id": "playing" },
+    { "id": "overlay" },
+    { "id": "notified" },
+    { "id": "ui_error" }
+  ],
+  "transitions": [
+    {
+      "id": "start_ui",
+      "from": "boot",
+      "intent": "app.start",
+      "to": "ready",
+      "actions": [
+        { "id": "ui.flow.start" }
+      ],
+      "onFailure": "ui_error"
+    },
+    {
+      "id": "start_game",
+      "from": "ready",
+      "intent": "menu.start",
+      "to": "playing"
+    },
+    {
+      "id": "show_overlay",
+      "from": "ready",
+      "intent": "overlay.show",
+      "to": "overlay",
+      "actions": [
+        {
+          "id": "ui.context.activate",
+          "arguments": {
+            "activationId": "pause-overlay",
+            "contextId": "Pause",
+            "scope": "application"
+          }
+        }
+      ],
+      "onFailure": "ui_error"
+    },
+    {
+      "id": "hide_overlay",
+      "from": "overlay",
+      "intent": "overlay.hide",
+      "to": "ready",
+      "actions": [
+        {
+          "id": "ui.context.deactivate",
+          "arguments": { "activationId": "pause-overlay" }
+        }
+      ],
+      "onFailure": "ui_error"
+    },
+    {
+      "id": "emit_notice",
+      "from": "ready",
+      "intent": "ui.notice",
+      "to": "notified",
+      "actions": [
+        {
+          "id": "ui.signal.emit",
+          "arguments": { "signalId": "bridge.notice" }
+        }
+      ],
+      "onFailure": "ui_error"
+    }
+  ]
+}

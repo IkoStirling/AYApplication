@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "id": "gameflow-ui-host",
+  "defaultEntry": "main",
+  "layers": [
+    {
+      "id": "main",
+      "order": 0,
+      "input": "consumeHandled",
+      "blocksLowerInput": false,
+      "maxActiveScreens": 1
+    }
+  ],
+  "slots": [
+    {
+      "id": "main.content",
+      "layer": "main",
+      "capacity": 1,
+      "restorePrevious": true
+    }
+  ],
+  "screens": [
+    {
+      "id": "menu",
+      "layout": "ui/menu.ui.json",
+      "layer": "main",
+      "slot": "main.content",
+      "scope": "application"
+    },
+    {
+      "id": "pause",
+      "layout": "ui/pause.ui.json",
+      "layer": "main",
+      "slot": "main.content",
+      "scope": "application"
+    }
+  ],
+  "contexts": [
+    {
+      "id": "Menu",
+      "priority": 0,
+      "slots": [
+        {
+          "slot": "main.content",
+          "operation": "present",
+          "screen": "menu"
+        }
+      ]
+    },
+    {
+      "id": "Pause",
+      "priority": 100,
+      "slots": [
+        {
+          "slot": "main.content",
+          "operation": "present",
+          "screen": "pause"
+        }
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "id": "main",
+      "contexts": ["Menu"]
+    }
+  ],
+  "signals": [
+    {
+      "id": "start_game",
+      "payload": [
+        { "id": "difficulty", "type": "string", "required": true },
+        { "id": "players", "type": "integer", "default": 1 }
+      ]
+    },
+    {
+      "id": "bridge.notice",
+      "payload": [
+        { "id": "message", "type": "string", "required": true },
+        { "id": "code", "type": "integer", "default": 0 }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "gameflow.request",
+      "inputs": [
+        { "id": "intent", "type": "string", "required": true },
+        { "id": "difficulty", "type": "string", "required": true },
+        { "id": "players", "type": "integer", "default": 1 }
+      ]
+    }
+  ]
+}
