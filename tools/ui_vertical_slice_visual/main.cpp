@@ -20,11 +20,13 @@
 #include <AYUI/Widget.h>
 #include <AYEventSystem/EventBus.h>
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #ifndef AY_UI_VERTICAL_SLICE_INTERACTIVE_DEFAULT
@@ -372,6 +374,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
                 }
 
                 ayt::render::RenderScene renderScene;
+                using FrameClock = std::chrono::steady_clock;
+                constexpr auto interactiveFrameDuration =
+                    std::chrono::duration<double>(1.0 / 60.0);
+                auto nextInteractiveFrame = FrameClock::now();
                 int frame = 0;
                 while (running && result == 0 && (interactive || frame < 72)) {
                     ++frame;
@@ -455,6 +461,18 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
                         interactiveCaptureRequested = false;
                     }
                     renderer.endFrame();
+                    if (interactive) {
+                        nextInteractiveFrame +=
+                            std::chrono::duration_cast<FrameClock::duration>(
+                                interactiveFrameDuration);
+                        const auto now = FrameClock::now();
+                        if (nextInteractiveFrame > now) {
+                            std::this_thread::sleep_until(nextInteractiveFrame);
+                        } else if (now - nextInteractiveFrame
+                                   > std::chrono::milliseconds(100)) {
+                            nextInteractiveFrame = now;
+                        }
+                    }
                 }
                 if (result == 0 && !allCapturesQueued) result = 18;
                 if (shortcutListener != 0) {
