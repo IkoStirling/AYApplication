@@ -71,6 +71,34 @@ struct GameFlowTraceEntry
     std::string detail;
 };
 
+inline constexpr std::size_t kNoGameFlowActionIndex =
+    static_cast<std::size_t>(-1);
+
+enum class GameFlowCoordinatorStatus : std::uint8_t
+{
+    NotReady,
+    Idle,
+    Queued,
+    Running,
+    WaitingForAction,
+};
+
+// An owning, point-in-time view intended for tooling and diagnostics. The
+// strings remain valid even if the coordinator advances or changes plan after
+// the snapshot is taken.
+struct GameFlowCoordinatorSnapshot
+{
+    GameFlowCoordinatorStatus status = GameFlowCoordinatorStatus::NotReady;
+    std::string currentStateId;
+    std::string activeTransitionId;
+    std::string activeActionId;
+    std::size_t activeActionIndex = kNoGameFlowActionIndex;
+    GameFlowGeneration generation = 0;
+    GameFlowActionExecutionId executionId = 0;
+    std::size_t queuedIntentCount = 0;
+    bool busy = false;
+};
+
 class GameFlowCoordinator
 {
 public:
@@ -109,6 +137,7 @@ public:
     [[nodiscard]] GameFlowActionExecutionId pendingAction() const noexcept;
     [[nodiscard]] std::size_t queuedIntentCount() const noexcept;
     [[nodiscard]] bool busy() const noexcept;
+    [[nodiscard]] GameFlowCoordinatorSnapshot snapshot() const;
 
     [[nodiscard]] const std::vector<GameFlowTraceEntry>& trace() const noexcept;
     void clearTrace() noexcept;

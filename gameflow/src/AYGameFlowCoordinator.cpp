@@ -180,7 +180,9 @@ public:
         std::size_t transitionIndex = 0;
         IntentRequest request;
         std::size_t nextAction = 0;
+        std::size_t activeActionIndex = kNoGameFlowActionIndex;
         double elapsedSeconds = 0.0;
+        GameFlowActionExecutionId activeActionExecution = 0;
         GameFlowActionExecutionId pendingAction = 0;
         GameFlowActionCancellationHandler onCancel;
     };
@@ -308,6 +310,8 @@ public:
         if (!active.has_value()) return;
         if (result.state == GameFlowActionState::Succeeded) {
             active->pendingAction = 0;
+            active->activeActionIndex = kNoGameFlowActionIndex;
+            active->activeActionExecution = 0;
             active->onCancel = {};
             driveActions();
             return;
@@ -329,7 +333,8 @@ public:
                 return;
             }
 
-            const auto& action = transition.actions[active->nextAction++];
+            active->activeActionIndex = active->nextAction++;
+            const auto& action = transition.actions[active->activeActionIndex];
             const auto* definition = registry->findAction(action.action);
             const auto* handler = registry->findActionHandler(action.action);
             if (definition == nullptr || handler == nullptr) {
@@ -340,6 +345,7 @@ public:
 
             const GameFlowActionExecutionId executionId =
                 nextActionExecutionId++;
+            active->activeActionExecution = executionId;
             GameFlowActionResult result;
             try {
                 const auto& intent = plan->document.intents[
@@ -377,7 +383,11 @@ public:
                     "action pending");
                 return;
             }
-            if (result.state == GameFlowActionState::Succeeded) continue;
+            if (result.state == GameFlowActionState::Succeeded) {
+                active->activeActionIndex = kNoGameFlowActionIndex;
+                active->activeActionExecution = 0;
+                continue;
+            }
             finish(result.state, std::move(result.message));
             return;
         }
@@ -572,6 +582,43 @@ std::size_t GameFlowCoordinator::queuedIntentCount() const noexcept
 bool GameFlowCoordinator::busy() const noexcept
 {
     return _impl->active.has_value();
+}
+
+GameFlowCoordinatorSnapshot GameFlowCoordinator::snapshot() const
+{
+    GameFlowCoordinatorSnapshot result;
+    result.currentStateId = currentState();
+    result.queuedIntentCount = _impl->requests.size();
+    result.busy = _impl->active.has_value();
+
+    if (_impl->plan == nullptr || _impl->registry == nullptr) {
+        result.status = GameFlowCoordinatorStatus::NotReady;
+        return result;
+    }
+    if (!_impl->active.has_value()) {
+        result.status = _impl->requests.empty()
+            ? GameFlowCoordinatorStatus::Idle
+            : GameFlowCoordinatorStatus::Queued;
+        return result;
+    }
+
+    const auto& active = *_impl->active;
+    const auto& normalized = _impl->plan->transitions[
+        active.transitionIndex];
+    const auto& transition = _impl->plan->document.transitions[
+        normalized.documentIndex];
+    result.status = active.pendingAction == 0
+        ? GameFlowCoordinatorStatus::Running
+        : GameFlowCoordinatorStatus::WaitingForAction;
+    result.activeTransitionId = transition.id;
+    result.generation = active.generation;
+    result.executionId = active.activeActionExecution;
+    result.activeActionIndex = active.activeActionIndex;
+    if (active.activeActionIndex < transition.actions.size()) {
+        result.activeActionId = transition.actions[
+            active.activeActionIndex].action;
+    }
+    return result;
 }
 
 const std::vector<GameFlowTraceEntry>& GameFlowCoordinator::trace() const noexcept

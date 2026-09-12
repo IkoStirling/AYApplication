@@ -199,6 +199,108 @@ TEST_SUITE_END
 
 TEST_SUITE(GameFlowCoordinatorTests)
 
+TEST_CASE(runtime_snapshot_distinguishes_lifecycle_and_locates_pending_action)
+{
+    GameFlowActionExecutionId pending = 0;
+    auto registry = makeRegistry(nullptr, &pending);
+    auto plan = buildMainPlan(registry);
+    GameFlowCoordinator coordinator;
+
+    auto snapshot = coordinator.snapshot();
+    CHECK(snapshot.status == GameFlowCoordinatorStatus::NotReady);
+    CHECK(snapshot.currentStateId.empty());
+    CHECK(snapshot.activeActionIndex == kNoGameFlowActionIndex);
+    CHECK_FALSE(snapshot.busy);
+
+    CHECK(coordinator.setPlan(&plan, &registry));
+    snapshot = coordinator.snapshot();
+    CHECK(snapshot.status == GameFlowCoordinatorStatus::Idle);
+    CHECK(snapshot.currentStateId == "main_menu");
+
+    CHECK(coordinator.request("start_game"));
+    snapshot = coordinator.snapshot();
+    CHECK(snapshot.status == GameFlowCoordinatorStatus::Queued);
+    CHECK(snapshot.queuedIntentCount == 1u);
+    CHECK_FALSE(snapshot.busy);
+    coordinator.update();
+
+    CHECK(coordinator.request("world_ready"));
+    CHECK(coordinator.request("return_to_menu"));
+    coordinator.update();
+    snapshot = coordinator.snapshot();
+    CHECK(snapshot.status == GameFlowCoordinatorStatus::WaitingForAction);
+    CHECK(snapshot.currentStateId == "loading");
+    CHECK(snapshot.activeTransitionId == "activate_world");
+    CHECK(snapshot.activeActionId == "test.load");
+    CHECK(snapshot.activeActionIndex == 0u);
+    CHECK(snapshot.generation != 0u);
+    CHECK(snapshot.executionId == pending);
+    CHECK(snapshot.queuedIntentCount == 1u);
+    CHECK(snapshot.busy);
+
+    CHECK(coordinator.completeAction(
+        pending, GameFlowActionResult::succeeded()));
+    snapshot = coordinator.snapshot();
+    CHECK(snapshot.status == GameFlowCoordinatorStatus::Queued);
+    CHECK(snapshot.currentStateId == "playing");
+    CHECK(snapshot.activeTransitionId.empty());
+    CHECK(snapshot.activeActionId.empty());
+    CHECK(snapshot.activeActionIndex == kNoGameFlowActionIndex);
+    CHECK(snapshot.generation == 0u);
+    CHECK(snapshot.executionId == 0u);
+    CHECK(snapshot.queuedIntentCount == 1u);
+    CHECK_FALSE(snapshot.busy);
+
+    coordinator.update();
+    snapshot = coordinator.snapshot();
+    CHECK(snapshot.status == GameFlowCoordinatorStatus::Idle);
+    CHECK(snapshot.currentStateId == "main_menu");
+    CHECK(snapshot.queuedIntentCount == 0u);
+}
+
+TEST_CASE(runtime_snapshot_identifies_a_synchronous_action_while_it_executes)
+{
+    GameFlowCoordinator coordinator;
+    GameFlowCoordinatorSnapshot observed;
+    GameFlowActionRegistry registry;
+    CHECK(registry.registerAction(
+        {"test.inspect", {}, false},
+        [&](const GameFlowActionInvocation& invocation) {
+            observed = coordinator.snapshot();
+            CHECK(observed.generation == invocation.generation);
+            CHECK(observed.executionId == invocation.executionId);
+            return GameFlowActionResult::succeeded();
+        }));
+
+    GameFlowDocument document;
+    document.id = "snapshot";
+    document.initialState = "before";
+    document.intents = {{"go", {}}};
+    document.states = {{"before"}, {"after"}};
+    GameFlowTransitionDefinition transition;
+    transition.id = "inspect";
+    transition.fromState = "before";
+    transition.triggerIntent = "go";
+    transition.toState = "after";
+    transition.actions.push_back({"test.inspect", {}});
+    document.transitions.push_back(std::move(transition));
+
+    GameFlowPlan plan;
+    CHECK(buildGameFlowPlan(document, registry, plan));
+    CHECK(coordinator.setPlan(&plan, &registry));
+    CHECK(coordinator.request("go"));
+    coordinator.update();
+
+    CHECK(observed.status == GameFlowCoordinatorStatus::Running);
+    CHECK(observed.currentStateId == "before");
+    CHECK(observed.activeTransitionId == "inspect");
+    CHECK(observed.activeActionId == "test.inspect");
+    CHECK(observed.activeActionIndex == 0u);
+    CHECK(observed.busy);
+    CHECK(coordinator.currentState() == "after");
+    CHECK(coordinator.snapshot().status == GameFlowCoordinatorStatus::Idle);
+}
+
 TEST_CASE(denied_high_priority_transition_falls_back_deterministically)
 {
     std::vector<std::string> records;
