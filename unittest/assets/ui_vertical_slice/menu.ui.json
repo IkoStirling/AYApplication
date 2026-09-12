@@ -3,6 +3,7 @@
     "type": "Panel",
     "id": "menu_root",
     "size": { "w": 1280, "h": 720 },
+    "backgroundEnabled": false,
     "children": [
       {
         "type": "TextLabel",

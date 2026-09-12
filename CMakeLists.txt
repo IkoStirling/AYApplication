@@ -533,6 +533,31 @@ if(BUILD_TESTING AND
             target_link_libraries(UIProductionVerticalSliceVisual PRIVATE
                 user32 gdi32)
 
+            # Human-facing companion of the deterministic hidden runner. It
+            # uses the same Scene/UI code but stays visible until the user
+            # closes it, so no editor integration is required for acceptance.
+            add_executable(UIProductionSceneIntegrationDemo WIN32
+                tools/ui_vertical_slice_visual/main.cpp
+            )
+            target_link_libraries(UIProductionSceneIntegrationDemo PRIVATE
+                AYApplicationUI
+                AYRenderer
+                AYDevice
+                AYScene
+            )
+            target_compile_definitions(UIProductionSceneIntegrationDemo PRIVATE
+                NOMINMAX
+                WIN32_LEAN_AND_MEAN
+                AY_UI_VERTICAL_SLICE_INTERACTIVE_DEFAULT=1
+                AY_UI_VERTICAL_SLICE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/unittest/assets/ui_vertical_slice"
+                AY_UI_VERTICAL_SLICE_CAPTURE_ROOT="${CMAKE_CURRENT_BINARY_DIR}/ui-production-vertical-slice-captures"
+            )
+            target_compile_options(UIProductionSceneIntegrationDemo PRIVATE
+                $<$<CXX_COMPILER_ID:MSVC>: /W4 /Zc:__cplusplus /Zc:preprocessor>
+            )
+            target_link_libraries(UIProductionSceneIntegrationDemo PRIVATE
+                user32 gdi32)
+
             add_custom_target(UIProductionVerticalSliceGoldenRegression
                 COMMAND powershell -NoProfile -ExecutionPolicy Bypass
                     -File ${CMAKE_CURRENT_SOURCE_DIR}/tools/ui_vertical_slice_visual/RunGoldenRegression.ps1

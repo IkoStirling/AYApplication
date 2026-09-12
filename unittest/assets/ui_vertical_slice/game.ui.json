@@ -3,6 +3,7 @@
     "type": "Panel",
     "id": "game_root",
     "size": { "w": 1280, "h": 720 },
+    "backgroundEnabled": false,
     "children": [
       {
         "type": "TextLabel",
@@ -10,6 +11,13 @@
         "position": { "x": 520, "y": 24 },
         "size": { "w": 240, "h": 32 },
         "text": "World presentation"
+      },
+      {
+        "type": "TextLabel",
+        "id": "integration_help",
+        "position": { "x": 350, "y": 682 },
+        "size": { "w": 580, "h": 24 },
+        "text": "F1 Dialogue  |  F2 Notice  |  F3 Pause  |  F9 Capture  |  Esc Exit"
       }
     ]
   }

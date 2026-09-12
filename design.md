@@ -1296,6 +1296,14 @@ Windows 视觉门禁由 `UIProductionVerticalSliceVisual` 在隐藏的 D3D11 窗
 容许单通道 2 级量化误差且变化像素上限为 0.05%。测试工具在 bgfx 原始 TGA 落盘后自行生成 PNG 预览，
 不依赖异步 PNG sidecar 的时序。常规 CI/本机复测无需人工操作；仅有意更新基线及视觉设计评审需人工确认。
 
+阶段十三把视觉门禁补全为真正的 Scene + UI 合成验证。测试场景中的可见对象来自真实
+`AYScene::world()` Entity 及 Transform，并组装成 `RenderScene`；帧顺序固定为
+`beginCompositeFrame -> UI populate -> Scene render -> UI flush -> endFrame`，保证 UI 最终覆盖 Scene，且两者
+共享同一 swapchain。`UIProductionSceneIntegrationDemo` 是这一实现的可见伴随程序，复用相同资产与运行路径，
+只将隐藏窗口改为持续交互窗口。它通过 AYDevice 处理点击、键盘与 IME，提供区域对话、通知、暂停模态和截图
+快捷键，因此人工验收不再依赖 AYEditor，也不会把 Win32 输入旁路引入 UI 集成层。自动 golden 仍由隐藏目标
+生成，避免人工窗口与输入时序污染确定性基线。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. GameFlow 应用流程核心

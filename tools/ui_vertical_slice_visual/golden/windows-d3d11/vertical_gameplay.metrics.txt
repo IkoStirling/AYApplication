@@ -2,5 +2,6 @@ scenario=vertical_gameplay
 frame=36
 framebuffer=1280x720
 backend=d3d11
-drawCalls=7
+sceneItems=5
+drawCalls=5
 queued=yes

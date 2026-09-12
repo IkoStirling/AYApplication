@@ -155,11 +155,12 @@ ctest --test-dir out/build/windows-debug-vs2026-insider `
 allocation、逐玩家准入、真实场景 tick、首名玩家离开后的席位保持，以及最后
 一名玩家离开后的世界释放。
 
-UI 生产纵向门禁分为两个独立进程：
+UI 生产纵向门禁包含功能进程、隐藏视觉回归和可见集成程序：
 
 ```powershell
 cmake --build --preset windows-debug-vs2026-insider `
   --target UIProductionVerticalSliceTest `
+           UIProductionSceneIntegrationDemo `
            UIProductionVerticalSliceGoldenRegression `
   --parallel 1
 ```
@@ -167,9 +168,17 @@ cmake --build --preset windows-debug-vs2026-insider `
 `UIProductionVerticalSliceTest` 从真实 `.uiflow.json` 与 `.ui.json` 资产启动，使用
 AYDevice 事件桥覆盖菜单进入、Scene HUD、区域触发、并行层、模态输入阻断、IME
 提交和 150% DPI，并写出确定性 `trace.json`。Windows D3D11 golden 目标在隐藏的
-独立窗口中捕获启动、Gameplay 和五 Screen 并行模态三张 1280×720 TGA；比较允许
+独立窗口中捕获启动、Gameplay 和五 Screen 并行模态三张 1280×720 TGA；Gameplay
+阶段会从真实 `AYScene::world()` 的 Entity/Transform 构建 RenderScene，并在 UI pass
+之前提交。比较允许
 单通道误差 2、变化像素不超过 0.05%。常规回归无需人工观察，只有有意更新 golden
 或判断新的视觉设计是否可接受时才需要人工确认。
+
+`UIProductionSceneIntegrationDemo` 复用完全相同的 Scene、Flow、Layout 和 AYDevice
+输入路径，但显示真实窗口并持续运行。点击 `Start Game` 后可观察 Scene 与 HUD 的组合；
+`F1` 切换区域对话，`F2` 切换通知，`F3` 打开或恢复暂停层，`F9` 截图，`Esc` 退出。
+暂停层的输入框可直接验证文本输入和 Windows IME。该程序是独立验收入口，不要求先
+启动 AYEditor。
 
 ## 当前限制与下一步
 
