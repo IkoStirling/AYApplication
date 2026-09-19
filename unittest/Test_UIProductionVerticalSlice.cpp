@@ -391,21 +391,28 @@ TEST_CASE(asset_driven_menu_scene_parallel_layers_modal_ime_and_dpi)
     expectScreens(runtime, {"game"}, "arena", failures);
     addSnapshot(trace, "arena", runtime, &sceneBridge, manager);
 
-    manager.setDpiScale(1.5f);
-    manager.setClientSize(1920.0f, 1080.0f);
-    host.update(0.0f);
-    manager.layout();
-    if (manager.getClientSize().x != 1280.0f
-        || manager.getClientSize().y != 720.0f) {
-        failures.push_back("150% DPI did not preserve the 1280x720 DIP viewport.");
+    for (const float dpiScale : {1.0f, 1.25f, 1.5f, 2.0f}) {
+        manager.setDpiScale(dpiScale);
+        manager.setClientSize(1280.0f * dpiScale, 720.0f * dpiScale);
+        host.update(0.0f);
+        manager.layout();
+        if (manager.getClientSize().x != 1280.0f
+            || manager.getClientSize().y != 720.0f) {
+            failures.push_back(std::to_string(
+                static_cast<int>(dpiScale * 100.0f))
+                + "% DPI did not preserve the 1280x720 DIP viewport.");
+        }
+        if (!runtime.emitSignal("pause.open", {}, &error)) {
+            failures.push_back("DPI pause.open failed: " + error);
+        }
+        dispatchClick(input, manager, host, runtime,
+                      "pause", "pause_resume", failures);
+        expectScreens(runtime, {"game"}, "dpi-resume", failures);
+        addSnapshot(trace,
+                    "dpi-resume-" + std::to_string(
+                        static_cast<int>(dpiScale * 100.0f)),
+                    runtime, &sceneBridge, manager);
     }
-    if (!runtime.emitSignal("pause.open", {}, &error)) {
-        failures.push_back("DPI pause.open failed: " + error);
-    }
-    dispatchClick(input, manager, host, runtime,
-                  "pause", "pause_resume", failures);
-    expectScreens(runtime, {"game"}, "dpi-resume", failures);
-    addSnapshot(trace, "dpi-resume", runtime, &sceneBridge, manager);
 
     if (!runtime.unsubscribeSignal(hudSubscription)) {
         failures.push_back("HUD Signal subscription could not be removed.");
