@@ -1,0 +1,5 @@
+{
+  "root": { "type": "Panel", "id": "game_root", "size": { "w": 1280, "h": 720 }, "backgroundEnabled": false, "children": [
+    { "type": "TextLabel", "id": "game_label", "position": { "x": 500, "y": 330 }, "size": { "w": 280, "h": 48 }, "text": "Town Gameplay" }
+  ] }
+}

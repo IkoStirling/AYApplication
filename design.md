@@ -1304,6 +1304,15 @@ Windows 视觉门禁由 `UIProductionVerticalSliceVisual` 在隐藏的 D3D11 窗
 快捷键，因此人工验收不再依赖 AYEditor，也不会把 Win32 输入旁路引入 UI 集成层。自动 golden 仍由隐藏目标
 生成，避免人工窗口与输入时序污染确定性基线。
 
+阶段十四补齐真实项目级闭环。独立的 `ui_production_project` fixture 通过 `.ayproject.json`
+声明 Scene、GameFlow、UIFlow 与六个 Layout，由 `ProjectContentValidator` 先执行 FullClient
+依赖闭包校验，再以真实 `RuntimeSceneLoader`、`SceneManager`、`GameFlowRuntime`、
+`GameFlowUIBridge`、`UIFlowRuntime` 和 `UIFlowSceneBridge` 启动。自动用例经由实际 Widget
+事件和 `DeviceInputBridge` 覆盖 Menu -> Loading -> Gameplay -> Pause -> Result、Town/Menu
+世界切换、World HUD 生命周期、进入动画、首次加载失败与返回菜单恢复、Retry。该 fixture 与
+视觉 golden 分离：前者负责跨模块行为闭包和打包资产声明，后者继续负责像素结果，避免两类
+验收互相污染。
+
 完整格式与运行语义见 [`../AYUI/docs/UIFlow.md`](../AYUI/docs/UIFlow.md)。
 
 ## 16. GameFlow 应用流程核心

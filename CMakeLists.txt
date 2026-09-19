@@ -567,7 +567,11 @@ if(BUILD_TESTING AND
             unittest/Test_UIProductionVerticalSlice.cpp
         )
         target_link_libraries(UIProductionVerticalSliceTest PRIVATE
+            AYApplication
+            AYProjectContentValidationCore
             AYApplicationUI
+            AYApplicationGameFlowUI
+            AYApplicationGameFlowWorld
             AYEntityCore
             AYScene
             AYTest
@@ -580,6 +584,7 @@ if(BUILD_TESTING AND
         target_compile_definitions(UIProductionVerticalSliceTest PRIVATE
             AY_UI_VERTICAL_SLICE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/unittest/assets/ui_vertical_slice"
             AY_UI_VERTICAL_SLICE_OUTPUT_ROOT="${CMAKE_CURRENT_BINARY_DIR}/ui-production-vertical-slice-output"
+            AY_UI_PRODUCTION_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/unittest/assets/ui_production_project"
         )
         if(MSVC)
             target_link_options(UIProductionVerticalSliceTest PRIVATE

@@ -1,0 +1,12 @@
+{
+  "animations": [{ "name": "loading.enter", "tracks": [{ "target": "loading_card", "property": "opacity", "keyframes": [
+    { "timeMs": 0, "value": 0.0, "curve": "linear" }, { "timeMs": 120, "value": 1.0, "curve": "linear" }
+  ] }] }],
+  "root": { "type": "Panel", "id": "loading_root", "size": { "w": 1280, "h": 720 }, "backgroundEnabled": false, "children": [
+    { "type": "Panel", "id": "loading_card", "position": { "x": 440, "y": 250 }, "size": { "w": 400, "h": 220 }, "children": [
+      { "type": "TextLabel", "id": "loading_text", "position": { "x": 80, "y": 45 }, "size": { "w": 240, "h": 42 }, "text": "Loading world..." },
+      { "type": "ProgressBar", "id": "loading_progress", "position": { "x": 50, "y": 105 }, "size": { "w": 300, "h": 18 }, "indeterminate": true },
+      { "type": "Button", "id": "loading_back", "position": { "x": 110, "y": 150 }, "size": { "w": 180, "h": 42 }, "text": "Back", "events": { "onClick": "cancelLoading" } }
+    ] }
+  ] }
+}

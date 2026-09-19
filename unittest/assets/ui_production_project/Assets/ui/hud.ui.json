@@ -1,0 +1,7 @@
+{
+  "root": { "type": "Panel", "id": "hud_root", "size": { "w": 1280, "h": 720 }, "backgroundEnabled": false, "children": [
+    { "type": "ProgressBar", "id": "hud_health", "position": { "x": 28, "y": 28 }, "size": { "w": 260, "h": 18 }, "min": 0, "max": 100, "value": 75 },
+    { "type": "Button", "id": "hud_pause", "position": { "x": 28, "y": 64 }, "size": { "w": 150, "h": 42 }, "text": "Pause", "events": { "onClick": "pauseGame" } },
+    { "type": "Button", "id": "hud_finish", "position": { "x": 28, "y": 118 }, "size": { "w": 150, "h": 42 }, "text": "Finish", "events": { "onClick": "finishMatch" } }
+  ] }
+}

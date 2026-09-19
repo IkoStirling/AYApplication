@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "id": "ui-production-game",
+  "initialState": "boot",
+  "entryParameters": [],
+  "result": [],
+  "extensions": {},
+  "intents": [
+    { "id": "app.start" }, { "id": "menu.start" },
+    { "id": "loading.cancel" }, { "id": "pause.open" },
+    { "id": "pause.close" }, { "id": "match.finish" },
+    { "id": "result.retry" }, { "id": "result.menu" }
+  ],
+  "states": [
+    { "id": "boot" }, { "id": "menu" }, { "id": "gameplay" },
+    { "id": "paused" }, { "id": "result" },
+    { "id": "load_error" }, { "id": "fatal_error" }
+  ],
+  "transitions": [
+    {
+      "id": "boot-ui", "from": "boot", "intent": "app.start", "to": "menu",
+      "actions": [{ "id": "ui.flow.start" }], "onFailure": "fatal_error"
+    },
+    {
+      "id": "start-game", "from": "menu", "intent": "menu.start", "to": "gameplay",
+      "actions": [
+        { "id": "world.replace", "arguments": { "worldId": "Town" } },
+        { "id": "ui.signal.emit", "arguments": { "signalId": "loading.complete" } }
+      ],
+      "onFailure": "load_error", "onCancel": "menu", "timeoutSeconds": 5.0
+    },
+    { "id": "recover-load", "from": "load_error", "intent": "loading.cancel", "to": "menu" },
+    { "id": "pause", "from": "gameplay", "intent": "pause.open", "to": "paused" },
+    { "id": "resume", "from": "paused", "intent": "pause.close", "to": "gameplay" },
+    { "id": "finish", "from": "gameplay", "intent": "match.finish", "to": "result" },
+    {
+      "id": "retry", "from": "result", "intent": "result.retry", "to": "gameplay",
+      "actions": [
+        { "id": "world.replace", "arguments": { "worldId": "Town" } },
+        { "id": "ui.signal.emit", "arguments": { "signalId": "loading.complete" } }
+      ],
+      "onFailure": "load_error", "timeoutSeconds": 5.0
+    },
+    {
+      "id": "return-menu", "from": "result", "intent": "result.menu", "to": "menu",
+      "actions": [{ "id": "world.replace", "arguments": { "worldId": "Menu" } }],
+      "onFailure": "fatal_error", "timeoutSeconds": 5.0
+    }
+  ]
+}

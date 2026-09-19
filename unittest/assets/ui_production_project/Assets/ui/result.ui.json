@@ -1,0 +1,12 @@
+{
+  "animations": [{ "name": "result.enter", "tracks": [{ "target": "result_card", "property": "opacity", "keyframes": [
+    { "timeMs": 0, "value": 0.0, "curve": "linear" }, { "timeMs": 160, "value": 1.0, "curve": "linear" }
+  ] }] }],
+  "root": { "type": "Panel", "id": "result_root", "size": { "w": 1280, "h": 720 }, "backgroundEnabled": false, "children": [
+    { "type": "Panel", "id": "result_card", "position": { "x": 430, "y": 220 }, "size": { "w": 420, "h": 280 }, "children": [
+      { "type": "TextLabel", "id": "result_title", "position": { "x": 90, "y": 45 }, "size": { "w": 240, "h": 52 }, "text": "Victory" },
+      { "type": "Button", "id": "result_retry", "position": { "x": 70, "y": 135 }, "size": { "w": 130, "h": 48 }, "text": "Retry", "events": { "onClick": "retryGame" } },
+      { "type": "Button", "id": "result_menu", "position": { "x": 220, "y": 135 }, "size": { "w": 130, "h": 48 }, "text": "Menu", "events": { "onClick": "returnMenu" } }
+    ] }
+  ] }
+}

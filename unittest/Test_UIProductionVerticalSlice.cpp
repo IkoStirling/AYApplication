@@ -1,4 +1,10 @@
 #include <AYApplication/UIFlowAssetValidation.h>
+#include <AYApplication/GameFlowRuntime.h>
+#include <AYApplication/GameFlowUIBridge.h>
+#include <AYApplication/GameProject.h>
+#include <AYApplication/IEngineHost.h>
+#include <AYApplication/ProjectContentValidator.h>
+#include <AYApplication/RuntimeSceneLoader.h>
 #include <AYApplication/UIFlowRuntime.h>
 #include <AYApplication/UIFlowSceneBridge.h>
 #include <AYApplication/UIManagerFlowScreenHost.h>
@@ -9,7 +15,9 @@
 #include <AYUI/UIManager.h>
 #include <AYUI/Widget.h>
 #include <AYEventSystem/EventBus.h>
+#include <AYGameLoop.h>
 #include <AYScene.h>
+#include <AYScene/SceneManager.h>
 
 #include <nlohmann/json.hpp>
 
@@ -19,6 +27,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace
@@ -28,6 +37,120 @@ using namespace ayt::app;
 using namespace ayt::device;
 using namespace ayt::ui;
 namespace fs = std::filesystem;
+
+class ProductionHost final : public IEngineHost
+{
+public:
+    explicit ProductionHost(ayt::scene::SceneManager* scenes)
+        : _scenes(scenes) {}
+
+    ayt::game::IGameLoop& gameLoop() override {
+        return ayt::game::GameLoop::instance();
+    }
+    ayt::event::EventBus& eventBus() override { return _events; }
+    ayt::game::ISubSystem* findSubSystem(const char*) override { return nullptr; }
+    void provideService(std::string_view key, void* instance) override {
+        if (instance == nullptr) _services.erase(std::string(key));
+        else _services[std::string(key)] = instance;
+    }
+    void* findService(std::string_view key) const override {
+        const auto found = _services.find(std::string(key));
+        return found == _services.end() ? nullptr : found->second;
+    }
+    void clearProvidedServices() override { _services.clear(); }
+    ayt::resource::ResourceManager* resources() override { return nullptr; }
+    ayt::physics::PhysicsManager* physics() override { return nullptr; }
+    ayt::physics::IPhysicsQuery* physicsQuery() override { return nullptr; }
+    ayt::audio::AudioEngine* audio() override { return nullptr; }
+    ayt::scene::SceneManager* scenes() override { return _scenes; }
+
+private:
+    ayt::event::EventBus _events;
+    ayt::scene::SceneManager* _scenes = nullptr;
+    std::unordered_map<std::string, void*> _services;
+};
+
+class ProductionWorldRouter final : public IGameWorldRouter
+{
+public:
+    ProductionWorldRouter(IRuntimeSceneLoader& loader,
+                          std::vector<GameWorld> worlds,
+                          std::string current)
+        : _loader(loader), _worlds(std::move(worlds)),
+          _current(std::move(current)) {}
+
+    bool requestWorld(std::string_view worldId) override {
+        if (_failNext) {
+            _failNext = false;
+            _lastError = "Injected production recovery failure.";
+            return false;
+        }
+        if (!_pending.empty()) {
+            _lastError = "A World transition is already pending.";
+            return false;
+        }
+        if (worldId == _current) {
+            _lastError.clear();
+            return true;
+        }
+        const GameWorld* world = findWorld(worldId);
+        if (world == nullptr) {
+            _lastError = "Unknown World id: " + std::string(worldId);
+            return false;
+        }
+        RuntimeSceneLoadRequest request;
+        request.requestId = _nextRequest++;
+        request.scenePath = world->scenePath;
+        request.sceneName = world->sceneName.empty() ? world->id : world->sceneName;
+        request.prepareActivation = world->prepareActivation;
+        if (!_loader.requestLoad(std::move(request))) {
+            _lastError = "RuntimeSceneLoader rejected the World transition.";
+            return false;
+        }
+        _pendingRequest = _nextRequest - 1u;
+        _pending = world->id;
+        _lastError.clear();
+        return true;
+    }
+
+    void update() {
+        if (_pending.empty()) return;
+        const RuntimeSceneLoadStatus status = _loader.getLoadStatus();
+        if (status.requestId != _pendingRequest) return;
+        if (status.state == RuntimeSceneLoadState::Ready) {
+            _current = std::move(_pending);
+            _pending.clear();
+            _pendingRequest = 0;
+            _lastError.clear();
+        } else if (status.state == RuntimeSceneLoadState::Failed
+                   || status.state == RuntimeSceneLoadState::Cancelled) {
+            _lastError = status.message;
+            _pending.clear();
+            _pendingRequest = 0;
+        }
+    }
+
+    void failNextRequest() { _failNext = true; }
+    std::string_view currentWorldId() const noexcept override { return _current; }
+    std::string_view pendingWorldId() const noexcept override { return _pending; }
+    std::string_view lastError() const noexcept override { return _lastError; }
+    const GameWorld* findWorld(std::string_view worldId) const noexcept override {
+        for (const GameWorld& world : _worlds) {
+            if (world.id == worldId) return &world;
+        }
+        return nullptr;
+    }
+
+private:
+    IRuntimeSceneLoader& _loader;
+    std::vector<GameWorld> _worlds;
+    std::string _current;
+    std::string _pending;
+    std::string _lastError;
+    std::uint64_t _nextRequest = 1;
+    std::uint64_t _pendingRequest = 0;
+    bool _failNext = false;
+};
 
 std::string readText(const fs::path& path)
 {
@@ -424,6 +547,256 @@ TEST_CASE(asset_driven_menu_scene_parallel_layers_modal_ime_and_dpi)
     sceneBridge.stop();
     runtime.unload();
     manager.shutdown();
+}
+
+TEST_CASE(real_project_menu_loading_gameplay_pause_result_and_recovery)
+{
+    const fs::path projectRoot(AY_UI_PRODUCTION_PROJECT_ROOT);
+    const fs::path assetRoot = projectRoot / "Assets";
+    std::vector<std::string> failures;
+
+    ProjectContentValidationOptions validationOptions;
+    validationOptions.enableGameFlowUIActions = true;
+    const ProjectContentValidationResult projectValidation =
+        validateProjectContent(projectRoot.string(),
+            ProjectContentValidationProfile::FullClient,
+            std::move(validationOptions));
+    if (!projectValidation) {
+        for (const ProjectContentValidationIssue& issue : projectValidation.issues) {
+            failures.push_back(issue.path + ": " + issue.message);
+        }
+    }
+    if (projectValidation.scenes != 2u) {
+        failures.push_back("Packaged project did not close over two Scene assets.");
+    }
+    if (projectValidation.uiLayouts != 6u) {
+        failures.push_back("Packaged project did not close over six UI layouts.");
+    }
+    if (projectValidation.gameFlows != 1u) {
+        failures.push_back("Packaged project did not close over its startup GameFlow.");
+    }
+
+    UIFlowDocument uiDocument;
+    std::vector<UIFlowDiagnostic> diagnostics;
+    if (!UIFlowSerializer::deserialize(
+            readText(assetRoot / "ui/production.uiflow.json"),
+            uiDocument, &diagnostics)) {
+        const std::string message = diagnosticText(diagnostics);
+        CHECK_MSG(false, message.c_str());
+        return;
+    }
+    const UIFlowAssetValidationResult uiAssets = validateUIFlowAssets(
+        uiDocument, (assetRoot / "ui").string());
+    if (!uiAssets.valid()) {
+        for (const UIFlowDiagnostic& diagnostic : uiAssets.diagnostics) {
+            failures.push_back(diagnostic.path + ": " + diagnostic.message);
+        }
+    }
+    if (uiAssets.dependencies.size() != 6u) {
+        failures.push_back("UI Flow package closure did not contain six layouts.");
+    }
+
+    UIManager manager;
+    manager.initialize(nullptr);
+    manager.setClientSize(1280.0f, 720.0f);
+    UIManagerFlowScreenHost screenHost(manager, (assetRoot / "ui").string());
+    UIFlowRuntime uiRuntime(screenHost);
+    DeviceInputBridge input(manager);
+    std::string error;
+    if (!uiRuntime.load(std::move(uiDocument), &error)) {
+        CHECK_MSG(false, error.c_str());
+        manager.shutdown();
+        return;
+    }
+
+    ayt::scene::SceneManager* scenes = defaultEngineHost().scenes();
+    scenes->setCurrent(nullptr);
+    RuntimeSceneLoaderConfig loaderConfig;
+    loaderConfig.initialSceneName = "Menu";
+    loaderConfig.initialScenePath =
+        (assetRoot / "worlds/menu.ayscene").string();
+    ProductionHost engineHost(scenes);
+    std::unique_ptr<IRuntimeSceneLoader> loader = createRuntimeSceneLoader(
+        *scenes, std::move(loaderConfig), &engineHost.eventBus());
+    if (!loader || !loader->initialize()) {
+        CHECK_MSG(false, "Could not initialize production RuntimeSceneLoader.");
+        manager.shutdown();
+        return;
+    }
+
+    std::vector<GameWorld> worlds = {
+        {"Menu", (assetRoot / "worlds/menu.ayscene").string(), "Menu"},
+        {"Town", (assetRoot / "worlds/town.ayscene").string(), "Town"},
+    };
+    ProductionWorldRouter router(*loader, std::move(worlds), "Menu");
+    engineHost.provideService(kHostServiceRuntimeSceneLoader, loader.get());
+    engineHost.provideService(kHostServiceGameWorldRouter, &router);
+
+    GameFlowRuntimeConfig gameConfig;
+    gameConfig.documentPath =
+        (assetRoot / "flows/production.gameflow.json").string();
+    gameConfig.enableWorldActions = true;
+    gameConfig.configureRegistry = [](
+        GameFlowActionRegistry& registry, std::string& registryError) {
+        return registerGameFlowUIActionTypes(registry, &registryError);
+    };
+    GameFlowRuntime gameRuntime(engineHost, std::move(gameConfig));
+    if (!gameRuntime.initialize()) {
+        const std::string message(gameRuntime.lastError());
+        CHECK_MSG(false, message.c_str());
+        loader->shutdown();
+        manager.shutdown();
+        return;
+    }
+
+    GameFlowUIBridgeConfig bridgeConfig;
+    bridgeConfig.signalBindings = {
+        {"game.start", "menu.start"},
+        {"game.startFail", "menu.start"},
+        {"loading.cancel", "loading.cancel"},
+        {"pause.open", "pause.open"},
+        {"pause.close", "pause.close"},
+        {"match.finish", "match.finish"},
+        {"result.retry", "result.retry"},
+        {"result.menu", "result.menu"},
+    };
+    GameFlowUIBridge gameUiBridge(
+        gameRuntime, uiRuntime, std::move(bridgeConfig));
+    if (!gameUiBridge.install(&error)) {
+        CHECK_MSG(false, error.c_str());
+        gameRuntime.shutdown();
+        loader->shutdown();
+        manager.shutdown();
+        return;
+    }
+
+    gameRuntime.update(0.0f);
+    expectScreens(uiRuntime, {"menu"}, "project-boot", failures);
+    if (gameRuntime.currentState() != "menu") {
+        failures.push_back("GameFlow did not enter menu after app.start.");
+    }
+
+    UIFlowSceneBridgeConfig sceneConfig;
+    sceneConfig.worldKeyResolver = [](const ayt::scene::Scene& scene) {
+        return scene.name();
+    };
+    sceneConfig.worldContexts.push_back({"Town", "WorldHud"});
+    UIFlowSceneBridge sceneBridge(
+        uiRuntime, engineHost.eventBus(), std::move(sceneConfig));
+    if (!sceneBridge.start(loader->currentScene(), &error)) {
+        failures.push_back("Scene bridge startup failed: " + error);
+    }
+
+    // First exercise a real failed World request and recover through UI input.
+    router.failNextRequest();
+    dispatchClick(input, manager, screenHost, uiRuntime,
+                  "menu", "menu_fail", failures);
+    expectScreens(uiRuntime, {"loading"}, "failed-load-visible", failures);
+    gameRuntime.update(0.0f);
+    if (gameRuntime.currentState() != "load_error") {
+        failures.push_back("Rejected World request did not route to load_error.");
+    }
+    dispatchClick(input, manager, screenHost, uiRuntime,
+                  "loading", "loading_back", failures);
+    gameRuntime.update(0.0f);
+    expectScreens(uiRuntime, {"menu"}, "failed-load-recovered", failures);
+    if (gameRuntime.currentState() != "menu") {
+        failures.push_back("Loading recovery did not return GameFlow to menu.");
+    }
+
+    // Successful path: UI input enters Loading before the asynchronous Scene
+    // completion advances both GameFlow and UI Flow to Gameplay.
+    dispatchClick(input, manager, screenHost, uiRuntime,
+                  "menu", "menu_start", failures);
+    expectScreens(uiRuntime, {"loading"}, "loading", failures);
+    const UIFlowMountedScreen* loading = mountedScreen(uiRuntime, "loading");
+    if (loading != nullptr) {
+        Widget* card = screenHost.findWidget(loading->mountId, "loading_card");
+        if (card == nullptr || card->getOpacity() >= 1.0f) {
+            failures.push_back("Loading enter animation did not start.");
+        }
+    }
+    gameRuntime.update(0.0f);
+    if (!gameRuntime.coordinator().busy()) {
+        failures.push_back("World replacement was not held as a pending action.");
+    }
+    loader->update(0.0f);
+    router.update();
+    engineHost.eventBus().pump();
+    gameRuntime.update(0.0f);
+    if (!sceneBridge.update(loader->currentScene(), &error)) {
+        failures.push_back("Town Scene bridge update failed: " + error);
+    }
+    expectScreens(uiRuntime, {"game", "hud"}, "gameplay", failures);
+    if (gameRuntime.currentState() != "gameplay"
+        || router.currentWorldId() != "Town") {
+        failures.push_back("Successful load did not enter Town gameplay.");
+    }
+
+    dispatchClick(input, manager, screenHost, uiRuntime,
+                  "hud", "hud_pause", failures);
+    gameRuntime.update(0.0f);
+    expectScreens(uiRuntime, {"game", "hud", "pause"}, "pause", failures);
+    if (gameRuntime.currentState() != "paused") {
+        failures.push_back("Pause input did not update GameFlow.");
+    }
+    dispatchClick(input, manager, screenHost, uiRuntime,
+                  "pause", "pause_resume", failures);
+    gameRuntime.update(0.0f);
+    expectScreens(uiRuntime, {"game", "hud"}, "resume", failures);
+
+    dispatchClick(input, manager, screenHost, uiRuntime,
+                  "hud", "hud_finish", failures);
+    gameRuntime.update(0.0f);
+    expectScreens(uiRuntime, {"result"}, "result", failures);
+    if (gameRuntime.currentState() != "result") {
+        failures.push_back("Finish input did not enter the Result state.");
+    }
+    const UIFlowMountedScreen* result = mountedScreen(uiRuntime, "result");
+    if (result != nullptr) {
+        Widget* card = screenHost.findWidget(result->mountId, "result_card");
+        if (card == nullptr || card->getOpacity() >= 1.0f) {
+            failures.push_back("Result enter animation did not start.");
+        }
+    }
+
+    dispatchClick(input, manager, screenHost, uiRuntime,
+                  "result", "result_retry", failures);
+    gameRuntime.update(0.0f);
+    expectScreens(uiRuntime, {"game", "hud"}, "retry", failures);
+    if (gameRuntime.currentState() != "gameplay") {
+        failures.push_back("Retry did not return GameFlow to gameplay.");
+    }
+
+    dispatchClick(input, manager, screenHost, uiRuntime,
+                  "hud", "hud_finish", failures);
+    gameRuntime.update(0.0f);
+    dispatchClick(input, manager, screenHost, uiRuntime,
+                  "result", "result_menu", failures);
+    gameRuntime.update(0.0f);
+    loader->update(0.0f);
+    router.update();
+    engineHost.eventBus().pump();
+    gameRuntime.update(0.0f);
+    if (!sceneBridge.update(loader->currentScene(), &error)) {
+        failures.push_back("Menu Scene bridge update failed: " + error);
+    }
+    expectScreens(uiRuntime, {"menu"}, "return-menu", failures);
+    if (gameRuntime.currentState() != "menu"
+        || router.currentWorldId() != "Menu") {
+        failures.push_back("Result-to-Menu did not complete its World switch.");
+    }
+
+    const std::string message = failureText(failures);
+    CHECK_MSG(failures.empty(), message.c_str());
+
+    sceneBridge.stop();
+    gameUiBridge.uninstall();
+    gameRuntime.shutdown();
+    loader->shutdown();
+    uiRuntime.unload();
+    manager.shutdown();
+    scenes->setCurrent(nullptr);
 }
 
 TEST_SUITE_END

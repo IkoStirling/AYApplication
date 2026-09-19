@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "ui-production-project",
+  "displayName": "UI Production Project",
+  "paths": { "assets": "Assets" },
+  "startupFlow": "flows/production.gameflow.json",
+  "worlds": [
+    { "id": "Menu", "scene": "worlds/menu.ayscene" },
+    { "id": "Town", "scene": "worlds/town.ayscene" }
+  ],
+  "ui": { "flow": "ui/production.uiflow.json" }
+}

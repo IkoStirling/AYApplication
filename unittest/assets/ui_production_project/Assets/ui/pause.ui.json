@@ -1,0 +1,6 @@
+{
+  "root": { "type": "Panel", "id": "pause_root", "size": { "w": 1280, "h": 720 }, "children": [
+    { "type": "TextLabel", "id": "pause_title", "position": { "x": 520, "y": 230 }, "size": { "w": 240, "h": 54 }, "text": "Paused" },
+    { "type": "Button", "id": "pause_resume", "position": { "x": 520, "y": 330 }, "size": { "w": 240, "h": 54 }, "text": "Resume", "events": { "onClick": "resumeGame" } }
+  ] }
+}
