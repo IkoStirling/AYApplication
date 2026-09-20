@@ -225,6 +225,47 @@ TEST_CASE(startup_closure_resolves_subflows_and_typed_content_references)
         "data/config.json"));
 }
 
+TEST_CASE(project_descriptor_can_enable_ui_action_contracts_for_headless_validation)
+{
+    TestProject project("descriptor-ui-actions");
+    writeValidProject(project);
+    std::string descriptor(kProject);
+    const std::string expected =
+        "\"gameFlow\": { \"contract\": \"gameflow.contract.json\" }";
+    const auto position = descriptor.find(expected);
+    CHECK(position != std::string::npos);
+    descriptor.replace(position, expected.size(),
+        "\"gameFlow\": { \"uiActions\": true, "
+        "\"contract\": \"gameflow.contract.json\" }");
+    project.write("project.ayproject.json", descriptor);
+    const auto result = validateProjectContent(project.root.string(),
+        ProjectContentValidationProfile::Headless);
+    CHECK(static_cast<bool>(result));
+    CHECK(hasDependency(result, ProjectContentDependencyKind::UIContext,
+        "Menu"));
+}
+
+TEST_CASE(project_descriptor_rejects_non_boolean_ui_action_setting)
+{
+    TestProject project("descriptor-ui-actions-type");
+    writeValidProject(project);
+    std::string descriptor(kProject);
+    const std::string expected =
+        "\"gameFlow\": { \"contract\": \"gameflow.contract.json\" }";
+    const auto position = descriptor.find(expected);
+    CHECK(position != std::string::npos);
+    descriptor.replace(position, expected.size(),
+        "\"gameFlow\": { \"uiActions\": \"yes\", "
+        "\"contract\": \"gameflow.contract.json\" }");
+    project.write("project.ayproject.json", descriptor);
+
+    const auto result = validateProjectContent(project.root.string(),
+        ProjectContentValidationProfile::Headless);
+    CHECK_FALSE(static_cast<bool>(result));
+    CHECK(hasIssue(result,
+        "Project gameFlow.uiActions must be a boolean"));
+}
+
 TEST_CASE(startup_flow_requires_the_default_startup_intent)
 {
     TestProject project("missing-startup-intent");

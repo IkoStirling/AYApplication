@@ -1044,7 +1044,35 @@ ProjectContentValidationResult validateProjectContent(
                     registryReady = false;
                 }
 
+                bool descriptorEnablesUiActions = false;
+                const nlohmann::json* gameFlowSettings = nullptr;
+                if (descriptor.is_object()) {
+                    if (const auto gameFlow = descriptor.find("gameFlow");
+                        gameFlow != descriptor.end()) {
+                        if (!gameFlow->is_object()) {
+                            addIssue(result, descriptorPath,
+                                "Project gameFlow settings must be an object.");
+                            registryReady = false;
+                        } else {
+                            gameFlowSettings = &*gameFlow;
+                            if (const auto uiActions =
+                                    gameFlow->find("uiActions");
+                                uiActions != gameFlow->end()) {
+                                if (!uiActions->is_boolean()) {
+                                    addIssue(result, descriptorPath,
+                                        "Project gameFlow.uiActions must be a boolean.");
+                                    registryReady = false;
+                                } else {
+                                    descriptorEnablesUiActions =
+                                        uiActions->get<bool>();
+                                }
+                            }
+                        }
+                    }
+                }
+
                 const bool enableUiActions = options.enableGameFlowUIActions
+                    || descriptorEnablesUiActions
                     || profile == ProjectContentValidationProfile::FullClient;
                 if (enableUiActions) {
                     if (!registerGameFlowUIActionTypes(
@@ -1056,23 +1084,16 @@ ProjectContentValidationResult validateProjectContent(
                 }
 
                 std::string contractAsset = options.gameFlowContractPath;
-                if (contractAsset.empty() && descriptor.is_object()) {
-                    if (const auto gameFlow = descriptor.find("gameFlow");
-                        gameFlow != descriptor.end()) {
-                        if (!gameFlow->is_object()) {
+                if (contractAsset.empty() && gameFlowSettings != nullptr) {
+                    if (const auto contract =
+                            gameFlowSettings->find("contract");
+                        contract != gameFlowSettings->end()) {
+                        if (!contract->is_string()) {
                             addIssue(result, descriptorPath,
-                                "Project gameFlow settings must be an object.");
+                                "Project gameFlow.contract must be a string.");
                             registryReady = false;
-                        } else if (const auto contract =
-                                   gameFlow->find("contract");
-                                   contract != gameFlow->end()) {
-                            if (!contract->is_string()) {
-                                addIssue(result, descriptorPath,
-                                    "Project gameFlow.contract must be a string.");
-                                registryReady = false;
-                            } else {
-                                contractAsset = contract->get<std::string>();
-                            }
+                        } else {
+                            contractAsset = contract->get<std::string>();
                         }
                     }
                 }

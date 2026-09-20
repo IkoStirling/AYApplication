@@ -128,6 +128,7 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 # runtime an Application-owned service rather than an AYUI singleton.
 if(TARGET AYUI)
     add_library(AYApplicationUI STATIC
+        ui/src/AYGameProjectUIFlow.cpp
         ui/src/AYUIFlowAssetValidation.cpp
         ui/src/AYUIFlowGraphExecutor.cpp
         ui/src/AYUIFlowSceneBridge.cpp
@@ -136,6 +137,7 @@ if(TARGET AYUI)
         ui/src/AYUIFlowRuntime.cpp
         ui/src/AYUIFlowRuntimeModule.cpp
         ui/src/AYUIManagerFlowScreenHost.cpp
+        ui/include/AYApplication/GameProjectUIFlow.h
         ui/include/AYApplication/UIFlowAssetValidation.h
         ui/include/AYApplication/UIFlowGraphExecutor.h
         ui/include/AYApplication/UIFlowSceneBridge.h
@@ -155,7 +157,11 @@ if(TARGET AYUI)
         AYEntityCore
         AYUI
     )
-    target_link_libraries(AYApplicationUI PRIVATE AYScene)
+    target_link_libraries(AYApplicationUI PRIVATE
+        AYScene
+        AYRenderer
+        AYDeviceSubSystem
+    )
     target_compile_options(AYApplicationUI PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>: /W4>
         $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>

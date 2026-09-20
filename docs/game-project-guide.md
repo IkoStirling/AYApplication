@@ -375,6 +375,7 @@ GameFlow。正式流程应使用项目内声明的稳定 World ID。
   "startupFlow": "flow/application.gameflow.json",
   "startupWorld": "main_menu",
   "gameFlow": {
+    "uiActions": true,
     "contract": "gameflow.contract.json"
   },
   "worlds": [
@@ -393,12 +394,15 @@ GameFlow。正式流程应使用项目内声明的稳定 World ID。
 }
 ```
 
+`gameFlow.uiActions` 表示项目会安装 GameFlow/UIFlow 桥。headless 内容验证会据此加载
+标准 UI 动作契约，但不会创建窗口、Widget 或渲染器；因此同一份流程可在完整客户端和
+无图形 CI 中验证。它应与游戏装配中的 `enableGameFlowUIBridge(...)` 保持一致。
+
 路径必须是项目根目录或资产根目录内的相对路径。`.ayeditor/run.json` 只作为个人或
 临时运行覆盖；团队共享配置写在项目清单。Tilemap 编辑器保存
 `.aytilemap.json` 时会在 `Assets/tilemaps` 同步生成运行时 `.aytilemap`，Scene 中
-引用后者。当前 UI 文件会被清单和验证器关联到 World；独立客户端的 World UI
-Overlay 生命周期尚未接入 `AYApplication`，在该能力完成前游戏代码不能假定它会
-随 World 自动显示。
+引用后者。独立客户端可通过 `enableGameProjectUIFlow(...)` 挂载项目级 UIFlow；
+GameFlow 再通过稳定 context 控制主菜单、HUD 等界面的显示生命周期。
 
 ## 独立内容验证
 
