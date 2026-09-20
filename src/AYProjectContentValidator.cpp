@@ -1,6 +1,7 @@
 #include <AYApplication/ProjectContentValidator.h>
 
 #include <AYApplication/GameFlowAssets.h>
+#include <AYApplication/GameFlowContract.h>
 #include <AYApplication/GameFlowStandardActions.h>
 #include <AYResource/Loader/TilemapLoader.h>
 #include <AYScene.h>
@@ -466,81 +467,9 @@ bool registerContractManifest(const fs::path& path,
                                GameFlowActionRegistry& registry,
                                std::string& error)
 {
-    try {
     nlohmann::json manifest;
     if (!loadJson(path, manifest, error)) return false;
-    if (!manifest.is_object() || !manifest.contains("schemaVersion")
-        || !manifest["schemaVersion"].is_number_unsigned()
-        || manifest["schemaVersion"].get<std::uint64_t>() != 1u) {
-        error = "GameFlow contract manifest requires schemaVersion 1.";
-        return false;
-    }
-    if (!hasOnlyKeys(manifest, {"schemaVersion", "actions", "guards"},
-            "GameFlow contract manifest", error)) return false;
-    const nlohmann::json actions = manifest.value(
-        "actions", nlohmann::json::array());
-    const nlohmann::json guards = manifest.value(
-        "guards", nlohmann::json::array());
-    if (!actions.is_array() || !guards.is_array()) {
-        error = "GameFlow contract actions and guards must be arrays.";
-        return false;
-    }
-    for (const auto& actionJson : actions) {
-        if (!actionJson.is_object() || !actionJson.contains("id")
-            || !actionJson["id"].is_string()) {
-            error = "Every GameFlow action contract needs an id string.";
-            return false;
-        }
-        if (!hasOnlyKeys(actionJson,
-                {"id", "arguments", "asynchronous", "references"},
-                "GameFlow action contract", error)) return false;
-        GameFlowActionTypeDefinition action;
-        action.id = actionJson["id"].get<std::string>();
-        if (!parseFields(actionJson.value(
-                "arguments", nlohmann::json::array()),
-                action.arguments, error)) return false;
-        if (const auto async = actionJson.find("asynchronous");
-            async != actionJson.end()) {
-            if (!async->is_boolean()) {
-                error = "Action asynchronous must be boolean.";
-                return false;
-            }
-            action.asynchronous = async->get<bool>();
-        }
-        if (!parseReferences(actionJson.value(
-                "references", nlohmann::json::array()),
-                action.references, error)) return false;
-        if (!registry.registerActionType(std::move(action), false, &error)) {
-            return false;
-        }
-    }
-    for (const auto& guardJson : guards) {
-        if (!guardJson.is_object() || !guardJson.contains("id")
-            || !guardJson["id"].is_string()) {
-            error = "Every GameFlow guard contract needs an id string.";
-            return false;
-        }
-        if (!hasOnlyKeys(guardJson, {"id", "arguments"},
-                "GameFlow guard contract", error)) return false;
-        GameFlowGuardTypeDefinition guard;
-        guard.id = guardJson["id"].get<std::string>();
-        if (!parseFields(guardJson.value(
-                "arguments", nlohmann::json::array()),
-                guard.arguments, error)) return false;
-        if (!registry.registerGuardType(std::move(guard), false, &error)) {
-            return false;
-        }
-    }
-    error.clear();
-    return true;
-    } catch (const std::exception& exception) {
-        error = std::string("GameFlow contract manifest is invalid: ")
-            + exception.what();
-        return false;
-    } catch (...) {
-        error = "GameFlow contract manifest is invalid.";
-        return false;
-    }
+    return loadGameFlowContract(manifest.dump(), registry, &error);
 }
 
 struct UiSignalField

@@ -172,6 +172,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 # validation tools execute exactly the same transition semantics as clients.
 add_library(AYApplicationGameFlow STATIC
     gameflow/src/AYGameFlowActionRegistry.cpp
+    gameflow/src/AYGameFlowContract.cpp
     gameflow/src/AYGameFlowAssets.cpp
     gameflow/src/AYGameFlowCoordinator.cpp
     gameflow/src/AYGameFlowDeterminism.cpp
@@ -181,6 +182,7 @@ add_library(AYApplicationGameFlow STATIC
     gameflow/src/AYGameFlowProgram.cpp
     gameflow/src/AYGameFlowStandardActions.cpp
     gameflow/include/AYApplication/GameFlowActionRegistry.h
+    gameflow/include/AYApplication/GameFlowContract.h
     gameflow/include/AYApplication/GameFlowAssets.h
     gameflow/include/AYApplication/GameFlowCoordinator.h
     gameflow/include/AYApplication/GameFlowDeterminism.h
@@ -201,7 +203,7 @@ target_link_libraries(AYApplicationGameFlow PRIVATE
 )
 target_compile_features(AYApplicationGameFlow PUBLIC cxx_std_23)
 target_compile_definitions(AYApplicationGameFlow PUBLIC
-    AYAPPLICATION_GAMEFLOW_SOURCE_ABI_VERSION=2)
+    AYAPPLICATION_GAMEFLOW_SOURCE_ABI_VERSION=3)
 target_compile_options(AYApplicationGameFlow PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
     $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>

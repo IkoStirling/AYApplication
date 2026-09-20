@@ -308,7 +308,7 @@ TEST_CASE(ui_request_action_resolves_the_active_subflow_intent_contract)
     if (!bridge.installed()) return;
 
     gameFlow.update(0.0f);
-    CHECK(gameFlow.coordinator().currentFlow() == "runtime-child");
+    CHECK(gameFlow.snapshot().currentFlowId == "runtime-child");
     CHECK_NOT_NULL(gameFlow.activeDocument());
 
     UIFlowPayload inputs;
@@ -318,7 +318,7 @@ TEST_CASE(ui_request_action_resolves_the_active_subflow_intent_contract)
         kUIFlowActionGameFlowRequest, std::move(inputs));
     CHECK(accepted.accepted);
     gameFlow.update(0.0f);
-    CHECK(gameFlow.coordinator().currentFlow() == "runtime-root");
+    CHECK(gameFlow.snapshot().currentFlowId == "runtime-root");
     CHECK(gameFlow.currentState() == "ready");
 }
 
@@ -343,7 +343,7 @@ TEST_CASE(ui_signal_binding_resolves_the_active_subflow_intent_contract)
     if (!bridge.installed()) return;
     CHECK(ui.start(std::string_view{}, &error));
     gameFlow.update(0.0f);
-    CHECK(gameFlow.coordinator().currentFlow() == "runtime-child");
+    CHECK(gameFlow.snapshot().currentFlowId == "runtime-child");
 
     UIFlowPayload payload;
     payload["difficulty"] = std::string("normal");
@@ -351,7 +351,7 @@ TEST_CASE(ui_signal_binding_resolves_the_active_subflow_intent_contract)
     CHECK(ui.emitSignal("start_game", std::move(payload), &error));
     gameFlow.update(0.0f);
 
-    CHECK(gameFlow.coordinator().currentFlow() == "runtime-root");
+    CHECK(gameFlow.snapshot().currentFlowId == "runtime-root");
     CHECK(gameFlow.currentState() == "ready");
     CHECK(bridge.lastError().empty());
 }

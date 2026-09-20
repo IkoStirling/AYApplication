@@ -717,7 +717,7 @@ TEST_CASE(real_project_menu_loading_gameplay_pause_result_and_recovery)
         }
     }
     gameRuntime.update(0.0f);
-    if (!gameRuntime.coordinator().busy()) {
+    if (!gameRuntime.snapshot().busy) {
         failures.push_back("World replacement was not held as a pending action.");
     }
     loader->update(0.0f);

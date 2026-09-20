@@ -132,8 +132,16 @@ public:
     [[nodiscard]] const GameFlowDocument* document() const noexcept;
     [[nodiscard]] const GameFlowProgram* program() const noexcept;
     [[nodiscard]] const GameFlowDocument* activeDocument() const noexcept;
-    [[nodiscard]] GameFlowCoordinator& coordinator() noexcept;
-    [[nodiscard]] const GameFlowCoordinator& coordinator() const noexcept;
+    // Expose an owning diagnostic view instead of the mutable coordinator.
+    // Runtime clients must submit intents and action completions through this
+    // facade so they cannot replace the normalized program or reset execution.
+    [[nodiscard]] GameFlowCoordinatorSnapshot snapshot() const;
+    bool completeAction(
+        GameFlowActionExecutionId executionId,
+        GameFlowActionResult result,
+        std::string* error = nullptr);
+    bool cancelActive(std::string message = {});
+    void setEventObserver(GameFlowEventObserver observer) noexcept;
     [[nodiscard]] const GameFlowActionRegistry* registry() const noexcept;
 
     // Runtime bridges may bind handlers only for types already accepted by

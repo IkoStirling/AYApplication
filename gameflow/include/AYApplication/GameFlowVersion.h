@@ -6,10 +6,10 @@
 // boundaries. Keep a source ABI number in every consumer so future stale
 // object mixes fail at link time instead of corrupting public struct layouts.
 #ifndef AYAPPLICATION_GAMEFLOW_SOURCE_ABI_VERSION
-#define AYAPPLICATION_GAMEFLOW_SOURCE_ABI_VERSION 2
+#define AYAPPLICATION_GAMEFLOW_SOURCE_ABI_VERSION 3
 #endif
 
-static_assert(AYAPPLICATION_GAMEFLOW_SOURCE_ABI_VERSION == 2,
+static_assert(AYAPPLICATION_GAMEFLOW_SOURCE_ABI_VERSION == 3,
               "GameFlow headers and target disagree; perform a full rebuild.");
 
 #define AYAPPLICATION_GAMEFLOW_STRINGIZE_IMPL(value) #value

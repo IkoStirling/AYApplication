@@ -573,14 +573,29 @@ const GameFlowDocument* GameFlowRuntime::activeDocument() const noexcept
     return _impl->coordinator.activeDocument();
 }
 
-GameFlowCoordinator& GameFlowRuntime::coordinator() noexcept
+GameFlowCoordinatorSnapshot GameFlowRuntime::snapshot() const
 {
-    return _impl->coordinator;
+    return _impl->coordinator.snapshot();
 }
 
-const GameFlowCoordinator& GameFlowRuntime::coordinator() const noexcept
+bool GameFlowRuntime::completeAction(
+    GameFlowActionExecutionId executionId,
+    GameFlowActionResult result,
+    std::string* error)
 {
-    return _impl->coordinator;
+    return _impl->coordinator.completeAction(
+        executionId, std::move(result), error);
+}
+
+bool GameFlowRuntime::cancelActive(std::string message)
+{
+    return _impl->coordinator.cancelActive(std::move(message));
+}
+
+void GameFlowRuntime::setEventObserver(
+    GameFlowEventObserver observer) noexcept
+{
+    _impl->coordinator.setEventObserver(std::move(observer));
 }
 
 const GameFlowActionRegistry* GameFlowRuntime::registry() const noexcept

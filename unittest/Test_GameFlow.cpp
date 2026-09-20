@@ -1,5 +1,6 @@
 #include <AYApplication/GameFlowActionRegistry.h>
 #include <AYApplication/GameFlowCoordinator.h>
+#include <AYApplication/GameFlowContract.h>
 #include <AYApplication/GameFlowDocument.h>
 #include <AYApplication/GameFlowMigration.h>
 #include <AYTest.h>
@@ -84,9 +85,34 @@ GameFlowPlan buildMainPlan(const GameFlowActionRegistry& registry)
 
 TEST_SUITE(GameFlowDocumentTests)
 
+TEST_CASE(project_contract_manifest_populates_authoring_metadata)
+{
+    GameFlowActionRegistry registry;
+    std::string error;
+    CHECK(loadGameFlowContract(R"JSON({
+        "schemaVersion": 1,
+        "actions": [{
+            "id": "project.open",
+            "arguments": [{"id":"world","type":"string","required":true}],
+            "references": [{"argument":"world","kind":"world"}]
+        }],
+        "guards": [{"id":"project.ready","arguments":[]}]
+    })JSON", registry, &error));
+    CHECK(error.empty());
+    const auto* action = registry.findAction("project.open");
+    CHECK_NOT_NULL(action);
+    if (action != nullptr) {
+        CHECK(action->arguments.size() == 1u);
+        CHECK(action->references.size() == 1u);
+        CHECK(action->references[0].kind == GameFlowReferenceKind::WorldId);
+    }
+    CHECK_NOT_NULL(registry.findGuard("project.ready"));
+    CHECK(registry.findActionHandler("project.open") == nullptr);
+}
+
 TEST_CASE(source_abi_tracks_the_public_action_metadata_layout)
 {
-    CHECK(kGameFlowSourceAbiVersion == 2u);
+    CHECK(kGameFlowSourceAbiVersion == 3u);
 }
 
 TEST_CASE(schema_v1_fixture_round_trips_without_losing_contract_data)

@@ -179,7 +179,7 @@ TEST_CASE(startup_intent_runs_on_the_first_ingress_update)
     runtime.update(0.0f);
     CHECK(started);
     CHECK(runtime.currentState() == "ready");
-    CHECK_FALSE(runtime.coordinator().busy());
+    CHECK_FALSE(runtime.snapshot().busy);
 
     runtime.shutdown();
     CHECK_FALSE(runtime.ready());
@@ -239,15 +239,15 @@ TEST_CASE(preflight_resolves_and_runtime_executes_a_subflow_program)
     GameFlowRuntime runtime(host, std::move(prepared));
     CHECK(runtime.initialize());
     runtime.update(0.0f);
-    CHECK(runtime.coordinator().currentFlow() == "runtime-child");
+    CHECK(runtime.snapshot().currentFlowId == "runtime-child");
     CHECK(runtime.currentState() == "waiting");
-    CHECK(runtime.coordinator().callDepth() == 1u);
+    CHECK(runtime.snapshot().callDepth == 1u);
 
     CHECK(runtime.request("finish"));
     runtime.update(0.0f);
-    CHECK(runtime.coordinator().currentFlow() == "runtime-root");
+    CHECK(runtime.snapshot().currentFlowId == "runtime-root");
     CHECK(runtime.currentState() == "ready");
-    CHECK(runtime.coordinator().callDepth() == 0u);
+    CHECK(runtime.snapshot().callDepth == 0u);
 }
 
 TEST_CASE(preflight_contains_subflow_resolver_exceptions)
@@ -374,7 +374,7 @@ TEST_CASE(program_reloaded_observer_sees_the_new_active_document)
     bool observerUnboundOldAction = false;
     bool observerBoundCandidateAction = false;
     GameFlowReloadResult nestedReload;
-    runtime.coordinator().setEventObserver(
+    runtime.setEventObserver(
         [&](const GameFlowEvent& event) {
             if (event.kind != GameFlowEventKind::ProgramReloaded) return;
             observed = true;
@@ -468,7 +468,7 @@ TEST_CASE(reload_waits_for_pending_transition_then_applies_at_safe_point)
     CHECK(runtime.initialize());
     runtime.update(0.0f);
     CHECK(pending != 0u);
-    CHECK(runtime.coordinator().busy());
+    CHECK(runtime.snapshot().busy);
 
     bool candidateConfigured = false;
     auto incompatible = runtimeConfig(candidateConfigured);
@@ -478,7 +478,7 @@ TEST_CASE(reload_waits_for_pending_transition_then_applies_at_safe_point)
         std::move(incompatible));
     CHECK(mismatch.state == GameFlowReloadState::Rejected);
     CHECK_FALSE(runtime.reloadPending());
-    CHECK(runtime.coordinator().busy());
+    CHECK(runtime.snapshot().busy);
 
     auto candidate = runtimeConfig(candidateConfigured);
     candidate.documentPath = reloadFixture().string();
@@ -500,7 +500,7 @@ TEST_CASE(reload_waits_for_pending_transition_then_applies_at_safe_point)
         == GameFlowReloadState::Deferred);
     CHECK(runtime.reloadPending());
 
-    CHECK(runtime.coordinator().completeAction(
+    CHECK(runtime.completeAction(
         pending, GameFlowActionResult::succeeded()));
     CHECK(runtime.currentState() == "done");
     runtime.update(0.0f);
