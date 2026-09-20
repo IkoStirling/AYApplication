@@ -221,27 +221,29 @@ game.configureModules = [](ayt::app::EngineModuleRuntime& runtime) {
         std::move(screenHost));
 };
 
-ayt::app::enableGameFlowUIBridge(game, {
-    .signalBindings = {
-        {"ui.start_game", "menu.start"},
-    },
-});
+ayt::app::enableGameFlowUIBridge(game);
 ```
 
 `loadApplicationUIFlow` 和 `makeApplicationScreenHost` 是示例中的项目 helper：前者使用
 `UIFlowSerializer` 读取项目的 `.uiflow.json`，后者通常返回绑定已初始化
 `UIManager` 的 `UIManagerFlowScreenHost`。它们需要由客户端组装层实现。
 
-UI 按钮不应直接打开 Scene。Screen 的 `.ui.json` 只把点击绑定到稳定
-handler，UIFlow 再把 handler 声明为稳定 Signal：
+UI 按钮不应直接打开 Scene。普通游戏流程按钮只需要在 Layout 中选择一个
+GameFlow Intent 作为应用命令槽位；UI Designer 的 `On Click` 下拉框会列出项目内的
+Intent。运行时若没有找到显式 Screen 事件映射，就把该 ID 直接交给 GameFlow：
 
 `main_menu.ui.json` 中的按钮片段：
 
 ```json
-{ "events": { "onClick": "startGame" } }
+{ "events": { "onClick": "menu.start" } }
 ```
 
-`application.uiflow.json` 中的 Screen 与 Signal 片段：
+此时 `.uiflow.json` 的 Screen 不需要重复声明 handler/Signal，应用组装层也不需要
+`signalBindings`。Full Client 与 Headless 内容验证都会检查命名空间形式的命令 ID
+（如 `menu.start`）是否对应已编译 GameFlow 程序中的 Intent。
+
+显式 UIFlow Signal 仍用于 UI 内部状态、带类型 payload 的高级交互或第三方 UI 适配。
+旧格式继续兼容：
 
 ```json
 {
@@ -261,7 +263,7 @@ handler，UIFlow 再把 handler 声明为稳定 Signal：
 
 `signalBindings` 明确指定 `signalId -> intentId`；桥接会在安装时同时校验 Signal、
 intent 和 payload schema。因此重命 UI Signal 或 GameFlow intent 时会在启动阶段失败，
-不会在按钮点击后静默路由到错误目标。当前按钮 command 不携带动态 payload；
+不会在按钮点击后静默路由到错误目标。直接按钮命令当前不携带动态 payload；
 这类 Signal 的必填字段需要在 UIFlow 中提供默认值，或由游戏系统显式发出带参 Signal。
 
 UIFlow 也可以通过 host action 主动请求 GameFlow intent。默认桥接会为

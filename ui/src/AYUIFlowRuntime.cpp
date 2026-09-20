@@ -1179,6 +1179,7 @@ public:
     UIFlowGraphRequestHandler graphHandler;
     UIFlowAsyncGraphRequestHandler asyncGraphHandler;
     UIFlowGraphInterruptHandler graphInterruptHandler;
+    UIFlowApplicationCommandHandler applicationCommandHandler;
     std::unordered_map<std::string, PendingGraphPipeline> pendingPipelines;
     std::unordered_map<UIFlowGraphExecutionId, std::string> executionRegions;
     std::deque<DeferredTransition> deferredTransitions;
@@ -1205,7 +1206,18 @@ UIFlowRuntime::UIFlowRuntime(IUIFlowScreenHost& screenHost)
     screenHost.setSignalEmitter(
         [impl](std::string_view signalId, UIFlowPayload payload,
                std::string* error) {
-            return impl->emitSignal(signalId, std::move(payload), error);
+            if (impl->document.findSignal(signalId) != nullptr) {
+                return impl->emitSignal(signalId, std::move(payload), error);
+            }
+            if (!impl->applicationCommandHandler) {
+                impl->setLastError(
+                    "Unknown UI Flow Signal or application command '"
+                        + std::string(signalId) + "'.",
+                    error);
+                return false;
+            }
+            return impl->applicationCommandHandler(
+                signalId, std::move(payload), error);
         });
 }
 
@@ -1715,6 +1727,51 @@ bool UIFlowRuntime::unsubscribeSignal(UIFlowSignalSubscription subscription)
             }),
         _impl->subscriptions.end());
     return _impl->subscriptions.size() != oldSize;
+}
+
+bool UIFlowRuntime::registerApplicationCommandHandler(
+    UIFlowApplicationCommandHandler handler)
+{
+    if (!handler || _impl->applicationCommandHandler) return false;
+    _impl->applicationCommandHandler = std::move(handler);
+    return true;
+}
+
+void UIFlowRuntime::unregisterApplicationCommandHandler() noexcept
+{
+    _impl->applicationCommandHandler = {};
+}
+
+bool UIFlowRuntime::requestApplicationCommand(
+    std::string_view commandId,
+    UIFlowPayload payload,
+    std::string* error)
+{
+    if (commandId.empty()) {
+        _impl->setLastError("Application command id must not be empty.", error);
+        return false;
+    }
+    if (!_impl->applicationCommandHandler) {
+        _impl->setLastError(
+            "No application command router is installed for '"
+                + std::string(commandId) + "'.",
+            error);
+        return false;
+    }
+    if (!_impl->applicationCommandHandler(
+            commandId, std::move(payload), error)) {
+        if (error != nullptr && !error->empty()) {
+            _impl->lastError = *error;
+        } else if (_impl->lastError.empty()) {
+            _impl->setLastError(
+                "Application command '" + std::string(commandId)
+                    + "' was rejected.",
+                error);
+        }
+        return false;
+    }
+    _impl->clearLastError(error);
+    return true;
 }
 
 UIFlowDocumentValidatorToken UIFlowRuntime::addDocumentValidator(

@@ -407,6 +407,31 @@ TEST_CASE(ui_host_action_requests_gameflow_with_typed_inputs)
     CHECK(invalidHarness.gameFlow->currentState() == "ready");
 }
 
+TEST_CASE(layout_application_command_routes_directly_to_same_gameflow_intent)
+{
+    BridgeHarness harness;
+    CHECK(harness.ready);
+    if (!harness.ready) return;
+
+    UIFlowPayload payload;
+    payload["difficulty"] = std::string("normal");
+    payload["players"] = std::int64_t(2);
+    std::string error;
+    CHECK(harness.ui.requestApplicationCommand(
+        "menu.start", std::move(payload), &error));
+    CHECK(error.empty());
+    harness.gameFlow->update(0.0f);
+    CHECK(harness.gameFlow->currentState() == "playing");
+
+    BridgeHarness unknown;
+    CHECK(unknown.ready);
+    if (!unknown.ready) return;
+    CHECK_FALSE(unknown.ui.requestApplicationCommand(
+        "menu.missing", {}, &error));
+    CHECK(error.find("menu.missing") != std::string::npos);
+    CHECK(unknown.gameFlow->currentState() == "ready");
+}
+
 TEST_CASE(gameflow_starts_ui_manages_contexts_and_emits_typed_signals)
 {
     BridgeHarness harness;

@@ -486,7 +486,93 @@ struct UiReferenceCatalog
     std::set<std::string, std::less<>> entries;
     std::set<std::string, std::less<>> contexts;
     std::map<std::string, std::vector<UiSignalField>, std::less<>> signals;
+    std::map<std::string, std::set<std::string, std::less<>>, std::less<>>
+        applicationCommands;
 };
+
+void collectLayoutEventIds(
+    const nlohmann::json& widget,
+    std::set<std::string, std::less<>>& ids)
+{
+    if (!widget.is_object()) return;
+    if (const auto events = widget.find("events");
+        events != widget.end() && events->is_object()) {
+        for (auto event = events->begin(); event != events->end(); ++event) {
+            if (event.value().is_string()
+                && !event.value().get_ref<const std::string&>().empty()) {
+                ids.insert(event.value().get<std::string>());
+            }
+        }
+    }
+    if (const auto click = widget.find("onClick");
+        click != widget.end() && click->is_string()
+        && !click->get_ref<const std::string&>().empty()) {
+        ids.insert(click->get<std::string>());
+    }
+    for (const auto& [key, value] : widget.items()) {
+        if (key == "events" || key == "reusable" || key == "animations") {
+            continue;
+        }
+        if (value.is_object()) {
+            collectLayoutEventIds(value, ids);
+        } else if (value.is_array()) {
+            for (const auto& child : value) {
+                if (child.is_object()) collectLayoutEventIds(child, ids);
+            }
+        }
+    }
+}
+
+bool collectApplicationCommands(
+    const fs::path& flowPath,
+    const nlohmann::json& document,
+    UiReferenceCatalog& catalog,
+    std::string& error)
+{
+    const auto screens = document.find("screens");
+    if (screens == document.end() || !screens->is_array()) return true;
+    for (const auto& screen : *screens) {
+        if (!screen.is_object()) continue;
+        const auto layout = screen.find("layout");
+        if (layout == screen.end() || !layout->is_string()
+            || layout->get_ref<const std::string&>().empty()) {
+            continue;
+        }
+        std::set<std::string, std::less<>> mappedHandlers;
+        if (const auto mappings = screen.find("events");
+            mappings != screen.end() && mappings->is_array()) {
+            for (const auto& mapping : *mappings) {
+                if (mapping.is_object() && mapping.contains("handler")
+                    && mapping["handler"].is_string()) {
+                    mappedHandlers.insert(mapping["handler"].get<std::string>());
+                }
+            }
+        }
+        const fs::path layoutPath =
+            (flowPath.parent_path() / layout->get<std::string>())
+                .lexically_normal();
+        nlohmann::json layoutDocument;
+        if (!loadJson(layoutPath, layoutDocument, error)) {
+            error = "UIFlow Screen layout '" + layoutPath.string()
+                + "' cannot be inspected: " + error;
+            return false;
+        }
+        const nlohmann::json* root = &layoutDocument;
+        if (const auto wrapped = layoutDocument.find("root");
+            wrapped != layoutDocument.end()) root = &*wrapped;
+        std::set<std::string, std::less<>> bindings;
+        collectLayoutEventIds(*root, bindings);
+        for (const std::string& binding : bindings) {
+            if (mappedHandlers.contains(binding)) continue;
+            // Direct application commands use namespace-qualified ids. This
+            // distinguishes them from legacy controller method names while
+            // still letting authors bind exactly the GameFlow Intent id.
+            if (binding.find('.') == std::string::npos) continue;
+            catalog.applicationCommands[binding].insert(layoutPath.string());
+        }
+    }
+    return true;
+}
 
 bool parseUiType(std::string_view name, GameFlowValueType& type)
 {
@@ -504,6 +590,9 @@ bool loadUiReferenceCatalog(const fs::path& path,
     try {
     nlohmann::json document;
     if (!loadJson(path, document, error)) return false;
+    if (!collectApplicationCommands(path, document, catalog, error)) {
+        return false;
+    }
 #if AY_APPLICATION_CONTENT_VALIDATOR_HAS_UI
     ayt::ui::UIFlowDocument flow;
     std::vector<ayt::ui::UIFlowDiagnostic> diagnostics;
@@ -1411,6 +1500,41 @@ ProjectContentValidationResult validateProjectContent(
                                             dependencyKind, source,
                                             resolvedTarget});
                                     }
+                                }
+                            }
+                        }
+                    }
+
+                    // UI Layout event bindings that are not explicitly
+                    // mapped by their UIFlow Screen are application command
+                    // slots. Validate their namespace-qualified ids against
+                    // the compiled GameFlow program so a typo is caught
+                    // before the button is exercised at runtime.
+                    if (enableUiActions && !uiFlowAsset.empty()) {
+                        const UiReferenceCatalog* uiCatalog = loadUiCatalog();
+                        if (uiCatalog == nullptr) {
+                            addIssue(result, uiFlowPath.empty()
+                                    ? descriptorPath : uiFlowPath,
+                                uiReferenceCatalogError.empty()
+                                    ? "Project UIFlow could not be inspected for application commands."
+                                    : uiReferenceCatalogError);
+                        } else {
+                            std::set<std::string, std::less<>> intentIds;
+                            for (const auto& [candidateId, candidatePlan] :
+                                 program.plans) {
+                                (void)candidateId;
+                                for (const auto& intent :
+                                     candidatePlan.document.intents) {
+                                    intentIds.insert(intent.id);
+                                }
+                            }
+                            for (const auto& [commandId, layoutPaths] :
+                                 uiCatalog->applicationCommands) {
+                                if (intentIds.contains(commandId)) continue;
+                                for (const std::string& layoutPath : layoutPaths) {
+                                    result.issues.push_back({layoutPath,
+                                        "UI application command '" + commandId
+                                            + "' references an unknown GameFlow Intent."});
                                 }
                             }
                         }

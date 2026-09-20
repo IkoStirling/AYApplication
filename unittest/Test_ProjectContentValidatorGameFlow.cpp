@@ -245,6 +245,54 @@ TEST_CASE(project_descriptor_can_enable_ui_action_contracts_for_headless_validat
         "Menu"));
 }
 
+TEST_CASE(layout_application_commands_are_checked_against_gameflow_intents)
+{
+    TestProject project("layout-application-command");
+    writeValidProject(project);
+    project.write("Assets/ui/main.uiflow.json", R"json({
+      "schemaVersion": 1,
+      "id": "main-ui",
+      "defaultEntry": "main",
+      "layers": [{ "id": "main", "order": 0 }],
+      "slots": [{ "id": "main.content", "layer": "main" }],
+      "screens": [{
+        "id": "menu", "layout": "menu.ui.json", "layer": "main",
+        "slot": "main.content", "scope": "application"
+      }],
+      "contexts": [{
+        "id": "Menu", "priority": 0,
+        "slots": [{
+          "slot": "main.content", "operation": "present", "screen": "menu"
+        }]
+      }],
+      "entries": [{ "id": "main", "contexts": ["Menu"] }],
+      "signals": [{
+        "id": "notice",
+        "payload": [{ "id": "message", "type": "string", "required": true }]
+      }]
+    })json");
+    project.write("Assets/ui/menu.ui.json", R"json({
+      "type": "Button", "id": "start",
+      "events": { "onClick": "app.start" }
+    })json");
+
+    ProjectContentValidationOptions options;
+    options.enableGameFlowUIActions = true;
+    auto result = validateProjectContent(project.root.string(),
+        ProjectContentValidationProfile::Headless, options);
+    CHECK(static_cast<bool>(result));
+
+    project.write("Assets/ui/menu.ui.json", R"json({
+      "type": "Button", "id": "start",
+      "events": { "onClick": "app.strat" }
+    })json");
+    result = validateProjectContent(project.root.string(),
+        ProjectContentValidationProfile::Headless, std::move(options));
+    CHECK_FALSE(static_cast<bool>(result));
+    CHECK(hasIssue(result, "application command 'app.strat'"));
+    CHECK(hasIssue(result, "unknown GameFlow Intent"));
+}
+
 TEST_CASE(project_descriptor_rejects_non_boolean_ui_action_setting)
 {
     TestProject project("descriptor-ui-actions-type");

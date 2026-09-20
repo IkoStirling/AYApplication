@@ -473,6 +473,7 @@ public:
     GameFlowReloadValidatorToken gameReloadValidator = 0;
     UIFlowDocumentValidatorToken uiDocumentValidator = 0;
     bool requestActionRegistered = false;
+    bool applicationCommandRegistered = false;
 
     void restoreHandlers() noexcept
     {
@@ -509,6 +510,10 @@ public:
             (void)state->uiFlow->unregisterAction(
                 kUIFlowActionGameFlowRequest);
             requestActionRegistered = false;
+        }
+        if (applicationCommandRegistered) {
+            state->uiFlow->unregisterApplicationCommandHandler();
+            applicationCommandRegistered = false;
         }
         restoreHandlers();
     }
@@ -576,6 +581,42 @@ bool GameFlowUIBridge::install(std::string* error)
     }
 
     const std::weak_ptr<Impl::State> weak = _impl->state;
+    if (!uiFlow.registerApplicationCommandHandler(
+            [weak](std::string_view commandId, UIFlowPayload payload,
+                   std::string* commandError) {
+                const auto state = weak.lock();
+                if (!state || !state->installed) {
+                    if (commandError != nullptr) {
+                        *commandError = "GameFlow UI bridge is unavailable.";
+                    }
+                    return false;
+                }
+                const GameFlowDocument* document =
+                    state->gameFlow->activeDocument();
+                const GameFlowIntentDefinition* intent = document == nullptr
+                    ? nullptr : document->findIntent(commandId);
+                if (intent == nullptr) {
+                    const std::string message =
+                        "Unknown GameFlow application command '"
+                        + std::string(commandId) + "'.";
+                    state->fail(message);
+                    if (commandError != nullptr) *commandError = message;
+                    return false;
+                }
+                const GameFlowRequestResult result = state->gameFlow->request(
+                    commandId, filterForIntent(payload, *intent));
+                if (!result) {
+                    state->fail(result.message);
+                    if (commandError != nullptr) *commandError = result.message;
+                    return false;
+                }
+                if (commandError != nullptr) commandError->clear();
+                return true;
+            })) {
+        return fail("UIFlow already has an application command router.");
+    }
+    _impl->applicationCommandRegistered = true;
+
     if (_impl->config.enableRequestAction) {
         if (!uiFlow.registerAction(std::string(kUIFlowActionGameFlowRequest),
                 [weak](const UIFlowActionInvocation& invocation) {
@@ -909,6 +950,10 @@ void GameFlowUIBridge::uninstall() noexcept
         (void)_impl->state->uiFlow->unregisterAction(
             kUIFlowActionGameFlowRequest);
         _impl->requestActionRegistered = false;
+    }
+    if (_impl->applicationCommandRegistered) {
+        _impl->state->uiFlow->unregisterApplicationCommandHandler();
+        _impl->applicationCommandRegistered = false;
     }
     for (const auto& [id, handle] : _impl->state->activations) {
         (void)id;

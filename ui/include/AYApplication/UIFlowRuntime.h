@@ -174,6 +174,10 @@ using UIFlowActionHandler =
 using UIFlowSignalHandler = std::function<void(
     std::string_view signalId,
     const UIFlowPayload& payload)>;
+using UIFlowApplicationCommandHandler = std::function<bool(
+    std::string_view commandId,
+    UIFlowPayload payload,
+    std::string* error)>;
 using UIFlowGuardEvaluator = std::function<bool(
     std::string_view expression,
     const UIFlowPayload& payload,
@@ -243,6 +247,19 @@ public:
         std::string signalId,
         UIFlowSignalHandler handler);
     bool unsubscribeSignal(UIFlowSignalSubscription subscription);
+
+    // A mounted Layout may bind an event directly to an application command.
+    // Explicit Screen handler-to-Signal mappings keep precedence; otherwise
+    // the unresolved handler id is offered to this single application router.
+    // GameFlowUIBridge installs the standard router and interprets the command
+    // id as a GameFlow Intent id.
+    bool registerApplicationCommandHandler(
+        UIFlowApplicationCommandHandler handler);
+    void unregisterApplicationCommandHandler() noexcept;
+    bool requestApplicationCommand(
+        std::string_view commandId,
+        UIFlowPayload payload = {},
+        std::string* error = nullptr);
 
     // Bridges may register cross-document contracts here. Validators run
     // after UIFlow's own validation and before load/reload mutates runtime

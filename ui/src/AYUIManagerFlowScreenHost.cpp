@@ -379,8 +379,13 @@ public:
             bindings.begin(), bindings.end(), [&](const auto& value) {
                 return value.handler == handler;
             });
-        if (found == bindings.end()) return {};
-        const std::string signal = found->signal;
+        // Explicit UIFlow Screen mappings retain their original Signal
+        // semantics. An unmapped Layout handler is an application command
+        // slot; UIFlowRuntime routes it to the installed application router
+        // (normally GameFlowUIBridge) using the same stable id.
+        const std::string signal = found == bindings.end()
+            ? std::string(handler) : found->signal;
+        if (signal.empty()) return {};
         return [this, signal]() {
             if (!signalEmitter) return;
             std::string ignored;
