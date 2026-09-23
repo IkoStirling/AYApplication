@@ -3,6 +3,7 @@
 #include <AYApplication/GameFlowAssets.h>
 #include <AYApplication/GameFlowContract.h>
 #include <AYApplication/GameFlowStandardActions.h>
+#include <AYEntity/EntityModule.h>
 #include <AYResource/Loader/TilemapLoader.h>
 #include <AYScene.h>
 #include <nlohmann/json.hpp>
@@ -894,6 +895,15 @@ ProjectContentValidationResult validateProjectContent(
     ProjectContentValidationResult result;
     result.profile = profile;
     try {
+    const ayt::entity::ComponentRegistryResult componentRegistration =
+        ayt::entity::registerEntityCoreComponents(
+            ayt::entity::ComponentRegistry::instance());
+    if (!componentRegistration) {
+        result.issues.push_back({projectRoot,
+            "Project Scene component registration failed: "
+                + componentRegistration.message()});
+        return result;
+    }
     std::error_code rootError;
     fs::path root = fs::absolute(fs::path(projectRoot), rootError);
     if (rootError) {

@@ -92,4 +92,41 @@ TEST_CASE(generated_project_passes_independent_content_validation)
 #endif
 }
 
+TEST_CASE(generated_2d_project_passes_the_same_validation_profiles)
+{
+    GeneratedProjectSandbox sandbox;
+    const GameProjectScaffoldPlan plan = planGameProjectScaffold({
+        .destination = sandbox.project.string(),
+        .engineSource = sandbox.engine.string(),
+        .displayName = "Generated 2D Golden Path",
+        .projectId = "generated-2d-golden-path",
+        .profile = GameProjectTemplateProfile::Client2D,
+    });
+    CHECK(static_cast<bool>(plan));
+
+    std::string error;
+    CHECK(writeGameProjectScaffold(plan, &error));
+    CHECK(error.empty());
+
+    const auto headless = validateProjectContent(
+        sandbox.project.string(),
+        ProjectContentValidationProfile::Headless);
+    if (!headless) printIssues(headless);
+    CHECK(static_cast<bool>(headless));
+    CHECK(headless.scenes == 2u);
+    CHECK(headless.uiLayouts == 2u);
+    CHECK(headless.gameFlows == 1u);
+
+#if AY_APPLICATION_CONTENT_VALIDATOR_HAS_UI
+    const auto fullClient = validateProjectContent(
+        sandbox.project.string(),
+        ProjectContentValidationProfile::FullClient);
+    if (!fullClient) printIssues(fullClient);
+    CHECK(static_cast<bool>(fullClient));
+    CHECK(fullClient.scenes == headless.scenes);
+    CHECK(fullClient.uiLayouts == headless.uiLayouts);
+    CHECK(fullClient.gameFlows == headless.gameFlows);
+#endif
+}
+
 TEST_SUITE_END

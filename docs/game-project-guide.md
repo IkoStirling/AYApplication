@@ -21,6 +21,12 @@ project_init_tool --output D:\Games\MyGame --name "My Game" `
 验证测试。生成的 preset 复用引擎 `out/build/vcpkg_installed`，仍需在终端设置同一
 `VCPKG_ROOT`。
 
+2D 模板的两个初始 Scene 都带可运行的 `OrthoCameraComponent`，并把 Editor 默认场景视图
+设为 2D。3D 模板把默认场景视图设为 3D，并保留一个 `Gameplay Root` 作为游戏内容根；
+目前 3D 游戏摄像机仍通过 Host/Renderer 视图契约配置，因为引擎尚未提供可序列化的 ECS
+3D Camera 组件。Editor 首次执行“运行项目”而可执行文件尚不存在时，会自动打开项目构建
+窗口并开始 Build & Run，成功后直接启动记录的产物。
+
 ## 推荐目录
 
 ```text
