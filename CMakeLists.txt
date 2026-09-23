@@ -399,9 +399,11 @@ target_compile_options(AYProjectContentValidationCore PRIVATE
 if(BUILD_TESTING)
     add_executable(ProjectContentValidatorGameFlowTest
         unittest/TestMain.cpp
-        unittest/Test_ProjectContentValidatorGameFlow.cpp)
+        unittest/Test_ProjectContentValidatorGameFlow.cpp
+        unittest/Test_ProjectScaffoldGoldenPath.cpp)
     target_link_libraries(ProjectContentValidatorGameFlowTest PRIVATE
         AYProjectContentValidationCore
+        AYProject
         AYTest)
     target_compile_definitions(ProjectContentValidatorGameFlowTest PRIVATE
         AY_APPLICATION_CONTENT_VALIDATOR_OUTPUT_ROOT="${CMAKE_CURRENT_BINARY_DIR}/project-content-validator-test-output"

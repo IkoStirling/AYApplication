@@ -4,6 +4,22 @@
 游戏模块和 World 路由；窗口、渲染、音频、物理、Scene/World、主循环与关闭顺序
 继续由 `AYApplication` 装配。独立游戏不需要经过 Editor。
 
+## 一条命令创建项目基线
+
+`project_init_tool` 调用 `AYProject` 的共享模板核心，一次生成本指南中的完整目录、
+CMake、`GameProject`、项目清单、初始 Scene、GameFlow、UIFlow、主菜单/HUD 和构建
+Profile。CLI 与后续 Editor“新建项目”窗口使用同一份生成规则。
+
+```powershell
+project_init_tool --output D:\Games\MyGame --name "My Game" `
+  --id my-game --profile client-3d
+```
+
+目标目录必须尚不存在；工具不会覆盖或拼接旧项目。可先加 `--dry-run` 查看确定性文件
+清单。`client-2d` 与 `client-3d` 选择编译能力；两者都会生成 Headless/Full Client 内容
+验证测试。生成的 preset 复用引擎 `out/build/vcpkg_installed`，仍需在终端设置同一
+`VCPKG_ROOT`。
+
 ## 推荐目录
 
 ```text
