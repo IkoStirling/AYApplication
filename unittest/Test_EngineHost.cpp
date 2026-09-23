@@ -26,6 +26,10 @@ struct FakePhysics {
     int id = 0;
 };
 
+struct FakeDeviceManager {
+    int id = 0;
+};
+
 /// Minimal host for registry tests (avoids AYResource/AYAudio link in this exe).
 class FakeHost final : public IEngineHost {
 public:
@@ -124,6 +128,24 @@ TEST_CASE(engine_host_scope_sets_current)
         CHECK(currentEngineHost()->findService("missing") == nullptr);
     }
     CHECK(currentEngineHost() == nullptr);
+}
+
+TEST_CASE(device_manager_helper_uses_typed_host_service)
+{
+    FakeHost host;
+    FakeDeviceManager devices{11};
+
+    CHECK(deviceManager(host) == nullptr);
+    host.provide(
+        kHostServiceDeviceManager,
+        reinterpret_cast<ayt::device::DeviceManager*>(&devices));
+    CHECK(deviceManager(host) ==
+          reinterpret_cast<ayt::device::DeviceManager*>(&devices));
+
+    host.provide(
+        kHostServiceDeviceManager,
+        static_cast<ayt::device::DeviceManager*>(nullptr));
+    CHECK(deviceManager(host) == nullptr);
 }
 
 TEST_SUITE_END

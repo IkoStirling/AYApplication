@@ -52,11 +52,13 @@ TEST_CASE(client_graph_installs_in_dependency_order_and_cleans_up)
     CHECK(registry.findSubSystem("Audio") == nullptr);
 
     bindBuiltinHostServices(defaultEngineHost());
+    CHECK_NOT_NULL(deviceManager(defaultEngineHost()));
     CHECK(defaultEngineHost().service<IRuntimeSceneLoader>(
               kHostServiceRuntimeSceneLoader)
           == findRegisteredRuntimeSceneLoader());
 
     runtime.shutdown();
+    provideDeviceManager(defaultEngineHost(), nullptr);
     defaultEngineHost().provide<IRuntimeSceneLoader>(
         kHostServiceRuntimeSceneLoader, nullptr);
     CHECK(registry.getCount() == 0);

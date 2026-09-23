@@ -20,6 +20,9 @@
 #if AY_APPLICATION_HAS_AUDIO
 #include <AYAudio/AudioSubSystem.h>
 #endif
+#if AY_APPLICATION_HAS_DEVICE
+#include <AYDevice/DeviceSubSystem.h>
+#endif
 #if AY_APPLICATION_HAS_PHYSICS
 #include <AYPhysics/IPhysicsQuery.h>
 #include <AYPhysics/PhysicsSubSystem.h>
@@ -228,6 +231,11 @@ void bindBuiltinHostServices(IEngineHost& host)
         }
     }
 #endif
+#if AY_APPLICATION_HAS_DEVICE
+    if (auto* deviceSub = ayt::device::DeviceSubSystem::findRegistered()) {
+        provideDeviceManager(host, &deviceSub->manager());
+    }
+#endif
     AY_DEPRECATED_SUPPRESS_BEGIN
     host.provide(kHostServiceScenes, &ayt::scene::SceneManager::instance());
     AY_DEPRECATED_SUPPRESS_END
@@ -263,6 +271,13 @@ void providePhysics(IEngineHost& host, ayt::physics::PhysicsManager* manager)
 void providePhysicsQuery(IEngineHost& host, ayt::physics::IPhysicsQuery* query)
 {
     host.provide(kHostServicePhysicsQuery, query);
+}
+
+void provideDeviceManager(
+    IEngineHost& host,
+    ayt::device::DeviceManager* manager)
+{
+    host.provide(kHostServiceDeviceManager, manager);
 }
 
 } // namespace ayt::app

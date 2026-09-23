@@ -77,17 +77,18 @@ TEST_CASE(restores_services_hooks_scene_and_active_world_as_one_scope)
     using namespace ayt::app;
 
     ScopeHost host;
-    int sentinels[7]{};
+    int sentinels[8]{};
     const char* keys[] = {
         kHostServiceResources,
         kHostServicePhysics,
         kHostServicePhysicsQuery,
         kHostServiceAudio,
+        kHostServiceDeviceManager,
         kHostServiceScenes,
         kHostServiceRuntimeSceneLoader,
         kHostServiceGameWorldRouter,
     };
-    for (std::size_t i = 0; i < 7; ++i) {
+    for (std::size_t i = 0; i < 8; ++i) {
         host.provideService(keys[i], &sentinels[i]);
     }
 
@@ -124,7 +125,7 @@ TEST_CASE(restores_services_hooks_scene_and_active_world_as_one_scope)
         CHECK(ayt::entity::World::activeWorld() == &runtime.world());
     }
 
-    for (std::size_t i = 0; i < 7; ++i) {
+    for (std::size_t i = 0; i < 8; ++i) {
         CHECK(host.findService(keys[i]) == &sentinels[i]);
     }
     CHECK(scenes.lifecycleObserver() == &observer);

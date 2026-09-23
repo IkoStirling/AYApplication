@@ -30,6 +30,11 @@ namespace ayt::audio
 class AudioEngine;
 }
 
+namespace ayt::device
+{
+class DeviceManager;
+}
+
 namespace ayt::scene
 {
 class SceneManager;
@@ -45,6 +50,7 @@ inline constexpr const char* kHostServiceResources    = "ayt.resource.ResourceMa
 inline constexpr const char* kHostServicePhysics      = "ayt.physics.PhysicsManager";
 inline constexpr const char* kHostServicePhysicsQuery = "ayt.physics.IPhysicsQuery";
 inline constexpr const char* kHostServiceAudio        = "ayt.audio.AudioEngine";
+inline constexpr const char* kHostServiceDeviceManager = "ayt.device.DeviceManager";
 // PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家。
 inline constexpr const char* kHostServiceScenes       = "ayt.scene.SceneManager";
 inline constexpr const char* kHostServiceRuntimeSceneLoader =
@@ -136,6 +142,30 @@ void providePhysics(IEngineHost& host, ayt::physics::PhysicsManager* manager);
 
 /// Register narrow IPhysicsQuery (`kHostServicePhysicsQuery`).
 void providePhysicsQuery(IEngineHost& host, ayt::physics::IPhysicsQuery* query);
+
+/**
+ * @brief Resolves the Host-owned device and logical-input service.
+ * @param host Active engine Host whose service table is queried.
+ * @return Borrowed manager, or nullptr when the Device runtime is not installed.
+ * @ownership
+ * The Host does not own the returned manager. Do not retain it across Host or
+ * module shutdown; call DeviceManager::isInitialized() before consuming input.
+ * @threading
+ * Resolve and use the manager from the game/UI thread.
+ */
+inline ayt::device::DeviceManager* deviceManager(IEngineHost& host) noexcept
+{
+    return host.service<ayt::device::DeviceManager>(kHostServiceDeviceManager);
+}
+
+/**
+ * @brief Publishes or clears the non-owning DeviceManager Host service.
+ * @param host Host receiving the service pointer.
+ * @param manager Borrowed manager; pass nullptr to clear the service.
+ */
+void provideDeviceManager(
+    IEngineHost& host,
+    ayt::device::DeviceManager* manager);
 
 /// RAII: sets currentEngineHost for the duration of Application::run.
 class EngineHostScope {

@@ -17,11 +17,12 @@ namespace ayt::app
 namespace
 {
 
-constexpr std::array<std::string_view, 11> kBuiltinServiceKeys{
+constexpr std::array<std::string_view, 12> kBuiltinServiceKeys{
     kHostServiceResources,
     kHostServicePhysics,
     kHostServicePhysicsQuery,
     kHostServiceAudio,
+    kHostServiceDeviceManager,
     kHostServiceScenes,
     kHostServiceRuntimeSceneLoader,
     kHostServiceGameWorldRouter,

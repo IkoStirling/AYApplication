@@ -1,6 +1,6 @@
 # Engine Host — 装配与服务约定
 
-**Status:** AYModule 默认装配 + **服务面**（`resources` / `physics` / `audio` / `scenes` + 可扩展键表）
+**Status:** AYModule 默认装配 + **服务面**（`resources` / `physics` / `audio` / `deviceManager` / `scenes` + 可扩展键表）
 **Owner:** `AYApplication`  
 **Related:** [`../design.md`](../design.md) · [`../../AYGameLoop/docs/sim-present-time.md`](../../AYGameLoop/docs/sim-present-time.md) · [`../../AYScene/design.md`](../../AYScene/design.md)
 
@@ -142,6 +142,7 @@ if (!host) { /* outside Application::run */ }
 ayt::resource::ResourceManager* res = host->resources();   // 通常非空（单例回退）
 ayt::physics::PhysicsManager*   phys = host->physics();  // 未 provide 则为 nullptr
 ayt::audio::AudioEngine*        aud = host->audio();     // SubSystem 未 init 前可能为 nullptr
+ayt::device::DeviceManager*     dev = ayt::app::deviceManager(*host); // Client/Editor 统一输入入口
 // PR-6 (v0.1.3, design §10 Q-F 收口): 关卡生命周期管家
 ayt::scene::SceneManager*       scenes = host->scenes(); // 永不为 null（Meyers singleton）
 
@@ -164,6 +165,7 @@ auto* inv = host->service<InventorySystem>("game.inventory");
 | `resources()` | 已 `provide` 的指针，否则回退 `ResourceManager::instance()` |
 | `physics()` | 登记表，或惰性从 `PhysicsSubSystem::findRegistered()->manager()`（与 `audio()` 同形态） |
 | `audio()` | 登记表，或惰性从名为 `"Audio"` 的 SubSystem 取 `engine()` |
+| `deviceManager(host)` | 从稳定键解析非拥有型 DeviceManager；Client 与 Editor 使用同一入口 |
 | `scenes()` | PR-6 (v0.1.3)：已 `provide` 的指针，否则回退 `SceneManager::instance()`（**永不为 null**） |
 | `findSubSystem(name)` | 逃生口；新代码优先具名/键服务，不要靠字符串找业务 API |
 
@@ -219,6 +221,7 @@ ayt::app::providePhysics(host, mgr);
 | `kHostServicePhysics` | `ayt.physics.PhysicsManager` | `PhysicsManager*` | `AYPhysics.Runtime` / 兼容 `registerPhysicsModule` / `providePhysics`；`physics()` 另有 SubSystem 惰性回退 | 未装配物理或尚未 initialize |
 | `kHostServicePhysicsQuery` | `ayt.physics.IPhysicsQuery` | `IPhysicsQuery*` | `providePhysicsQuery` / SubSystem `query()` | 未装配物理或尚未 initialize |
 | `kHostServiceAudio` | `ayt.audio.AudioEngine` | `AudioEngine*` | bind 时若已 init；否则 `audio()` 惰性查 SubSystem | 无 Audio 模块或尚未 initialize |
+| `kHostServiceDeviceManager` | `ayt.device.DeviceManager` | `DeviceManager*` | Client 由 `bindBuiltinHostServices` 映射 DeviceSubSystem；Editor 由 composition root 调用 `provideDeviceManager` | Headless、Device 模块未安装或尚未 initialize |
 | `kHostServiceScenes` | `ayt.scene.SceneManager` | `SceneManager*` | `bindBuiltinHostServices`（PR-6 v0.1.3，Meyers singleton）；`scenes()` 另有 instance 回退 | 几乎不应为空（单例） |
 | `kHostServiceRuntimeSceneLoader` | `ayt.app.RuntimeSceneLoader` | `IRuntimeSceneLoader*` | `AYApplication.RuntimeSceneLoader` 安装，`bindBuiltinHostServices` 发布 | Client 禁用或未安装 RuntimeSceneLoader |
 | `kHostServiceGameWorldRouter` | `ayt.app.GameWorldRouter` | `IGameWorldRouter*` | `runGameProject` 添加的 `AYApplication.GameWorldRouter` | Server、非 GameProject 应用或尚未初始化 |

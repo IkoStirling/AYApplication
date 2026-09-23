@@ -94,6 +94,11 @@ Scene/EventBus 观察者、Task 完成 hook、Editor 自有 DeviceManager 与输
 Host 接线职责。Video 与 Online 栈已经拥有模块节点，但不会进入默认 Client/Server/Editor；
 项目通过 `GameDesc::configureModules` 显式选择，普通应用不会因此增加 FFmpeg 或在线后端。
 
+Client 的 Device 模块与 Editor 自有设备层都会把同一个
+`ayt.device.DeviceManager` 非拥有型服务发布到 Host。玩法代码统一通过
+`ayt::app::deviceManager(host)` 获取输入和主窗口；Host scope 在退出时恢复或清除该
+指针，因此调用方不得跨 Host/module shutdown 缓存它。
+
 ```cpp
 ayt::app::GameDesc desc;
 desc.configureModules = [onlineConfig](
