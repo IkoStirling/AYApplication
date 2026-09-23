@@ -8,7 +8,8 @@
 
 `project_init_tool` 调用 `AYProject` 的共享模板核心，一次生成本指南中的完整目录、
 CMake、`GameProject`、项目清单、初始 Scene、GameFlow、UIFlow、主菜单/HUD 和构建
-Profile。CLI 与后续 Editor“新建项目”窗口使用同一份生成规则。
+Profile。Editor 的“文件 → 新建项目…”窗口与 CLI 使用同一份生成规则；创建完成后
+Editor 会直接打开新项目。
 
 ```powershell
 project_init_tool --output D:\Games\MyGame --name "My Game" `
