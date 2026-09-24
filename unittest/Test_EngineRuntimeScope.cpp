@@ -77,7 +77,7 @@ TEST_CASE(restores_services_hooks_scene_and_active_world_as_one_scope)
     using namespace ayt::app;
 
     ScopeHost host;
-    int sentinels[8]{};
+    int sentinels[9]{};
     const char* keys[] = {
         kHostServiceResources,
         kHostServicePhysics,
@@ -87,8 +87,9 @@ TEST_CASE(restores_services_hooks_scene_and_active_world_as_one_scope)
         kHostServiceScenes,
         kHostServiceRuntimeSceneLoader,
         kHostServiceGameWorldRouter,
+        kHostServiceSaveGame,
     };
-    for (std::size_t i = 0; i < 8; ++i) {
+    for (std::size_t i = 0; i < 9; ++i) {
         host.provideService(keys[i], &sentinels[i]);
     }
 
@@ -116,16 +117,19 @@ TEST_CASE(restores_services_hooks_scene_and_active_world_as_one_scope)
         // Module installation happens after the scope captures its snapshot.
         // A service published by that runtime must not survive scope teardown.
         int runtimePhysics = 0;
+        int runtimeSaveGame = 0;
         host.provideService(kHostServicePhysics, &runtimePhysics);
+        host.provideService(kHostServiceSaveGame, &runtimeSaveGame);
         scope.refresh();
         CHECK(host.findService(kHostServicePhysics) == &runtimePhysics);
+        CHECK(host.findService(kHostServiceSaveGame) == &runtimeSaveGame);
 
         scenes.setEdit(&runtime);
         scenes.setCurrent(&runtime);
         CHECK(ayt::entity::World::activeWorld() == &runtime.world());
     }
 
-    for (std::size_t i = 0; i < 8; ++i) {
+    for (std::size_t i = 0; i < 9; ++i) {
         CHECK(host.findService(keys[i]) == &sentinels[i]);
     }
     CHECK(scenes.lifecycleObserver() == &observer);

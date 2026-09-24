@@ -6,6 +6,7 @@
 #include <AYApplication/GameFlowRuntimeModule.h>
 #include <AYApplication/GameFlowWorldActions.h>
 #include <AYApplication/IEngineHost.h>
+#include <AYApplication/ProjectSaveGame.h>
 #include <AYApplication/RuntimeSceneLoader.h>
 #include <AYApplication/RuntimeSceneLoaderModule.h>
 #include <AYGameLoop/SubSystemModule.h>
@@ -635,6 +636,12 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
     // preparation without relying on an interactive desktop in CI.
     if (commandLine.validateStartup) return 0;
 
+    // Resolve once so GameDesc, the Host service, and gameplay all observe the
+    // same command-line/project/platform path precedence.
+    project.userDataPath = resolveGameUserDataPath(project, commandLine);
+    auto projectSaveGames = std::make_shared<SaveGameService>(
+        SaveGameServiceConfig{project.userDataPath, project.id});
+
     GameDesc desc;
     desc.name = project.displayName.c_str();
     desc.width = project.width;
@@ -661,8 +668,11 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
             worlds = std::move(worlds),
             routerStartupWorld = std::move(routerStartupWorld),
             preparedGameFlowSeed,
+            projectSaveGames,
             configureGameModules = std::move(configureGameModules)](
                 EngineModuleRuntime& runtime) mutable {
+            runtime.context().host().provide(
+                kHostServiceSaveGame, projectSaveGames.get());
             auto result = runtime.modules().emplace<GameWorldRouterModule>(
                 runtime.context().host(),
                 std::move(worlds),
@@ -680,8 +690,11 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
     } else {
         desc.configureModules = [
             preparedGameFlowSeed,
+            projectSaveGames,
             configureGameModules = std::move(configureGameModules)](
                 EngineModuleRuntime& runtime) mutable {
+            runtime.context().host().provide(
+                kHostServiceSaveGame, projectSaveGames.get());
             ayt::module::ModuleResult result =
                 ayt::module::ModuleResult::success();
             if (*preparedGameFlowSeed) {

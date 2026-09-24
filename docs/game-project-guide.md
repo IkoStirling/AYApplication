@@ -338,6 +338,50 @@ int main(int argc, char* argv[])
 }
 ```
 
+## 最小游戏存档
+
+`ay_add_game_executable` 会为标准游戏入口链接 headless-safe 的
+`AYApplicationSaveGame`。`runGameProject` 会按最终命令行和项目配置创建唯一实例并放入
+Host。游戏自己的 SubSystem 包含 `AYApplicationSaveGame.h`，从模块收到的 Host 获取：
+
+```cpp
+auto* saves = ayt::app::saveGameService(host);
+if (saves == nullptr) {
+    // 当前代码不在标准 GameProject Application 生命周期内
+}
+
+PlayerProgress progress;
+std::string payload;
+std::string error;
+if (!ayt::app::encodeSaveGamePayload(progress, payload, error)) {
+    // 显示或记录 error
+}
+auto saved = saves->save("autosave", 3, payload);
+```
+
+读取时给出当前游戏数据版本和从旧版本到新版本的显式迁移步骤：
+
+```cpp
+auto loaded = saves->load("autosave", 3, migrations);
+if (loaded) {
+    ayt::app::decodeSaveGamePayload(loaded.payloadJson, progress, error);
+}
+```
+
+目录优先级是 `-user-data`、`GameProject::userDataPath`、操作系统当前用户应用数据目录。
+实际文件放在 `<user-data>/SaveGames/<slot>.aysave.json`，并保留一份 `.bak`。写入使用
+同目录临时文件和原子替换；主文件损坏或丢失时读取上一份有效备份，并通过
+`RecoveredFromBackup` 告知游戏。迁移只发生在内存中，游戏确认状态有效后再主动保存，
+因此加载旧存档不会产生隐式磁盘写入。
+
+不运行 Application 的离线工具或测试可以显式调用
+`makeProjectSaveGameService(project, commandLine)` 创建隔离实例；游戏运行时代码不要再创建
+第二套服务。
+
+payload 只包含跨 World 仍有意义的游戏数据，例如设置、进度、日期、房间 ID、角色状态。
+它不直接序列化 Scene、World、Entity 或运行时资源指针。World 切换仍通过稳定 ID 完成；
+云同步、跨设备冲突和完整 ECS 快照不在当前基础能力范围内。
+
 ## 跨 World 配置
 
 `GameWorld::id` 是游戏代码和存档使用的稳定 ID，文件名可以调整。运行时通过 Host

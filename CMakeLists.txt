@@ -173,6 +173,43 @@ endif()
 # deliberately compile the same API without bringing UI into AYApplication.
 find_package(nlohmann_json CONFIG REQUIRED)
 
+# Project-owned SaveGame persistence. This companion remains independent of
+# rendering, UI, Scene and ECS so clients and headless servers share one file
+# format and recovery policy.
+add_library(AYApplicationSaveGame STATIC
+    savegame/src/AYSaveGameService.cpp
+    savegame/include/AYApplication/ProjectSaveGame.h
+    savegame/include/AYApplication/SaveGamePayload.h
+    savegame/include/AYApplication/SaveGameService.h
+    savegame/include/AYApplication/SaveGameVersion.h
+    AYApplicationSaveGame.h
+)
+target_include_directories(AYApplicationSaveGame PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/savegame/include
+)
+target_link_libraries(AYApplicationSaveGame PUBLIC
+    AYSerializer
+)
+target_link_libraries(AYApplicationSaveGame PRIVATE
+    AYIO
+    nlohmann_json::nlohmann_json
+)
+target_compile_features(AYApplicationSaveGame PUBLIC cxx_std_23)
+target_compile_definitions(AYApplicationSaveGame PUBLIC
+    AYAPPLICATION_SAVEGAME_SOURCE_ABI_VERSION=1)
+target_compile_definitions(AYApplicationSaveGame PRIVATE
+    $<$<PLATFORM_ID:Windows>:NOMINMAX;WIN32_LEAN_AND_MEAN>)
+target_compile_options(AYApplicationSaveGame PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+)
+
+# The standard GameProject path owns and publishes one SaveGame service. The
+# persistence target itself stays free of an AYApplication library dependency,
+# so this remains a one-way assembly edge.
+target_link_libraries(${PROJECT_NAME} PRIVATE AYApplicationSaveGame)
+
 # Application-level flow contract and runtime. This target is intentionally
 # independent of AYApplicationUI, rendering, and device code so servers and
 # validation tools execute exactly the same transition semantics as clients.
@@ -300,6 +337,24 @@ if(TARGET AYApplicationUI)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(SaveGameServiceTest
+        unittest/TestMain.cpp
+        unittest/Test_SaveGameService.cpp
+    )
+    target_link_libraries(SaveGameServiceTest PRIVATE
+        AYApplicationSaveGame
+        AYApplication
+        AYTest
+    )
+    target_compile_definitions(SaveGameServiceTest PRIVATE
+        "AY_APPLICATION_SAVEGAME_TEST_ROOT=\"${CMAKE_CURRENT_BINARY_DIR}/savegame-test-output\"")
+    target_compile_options(SaveGameServiceTest PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>
+    )
+    ay_add_test(SaveGameServiceTest
+        LABELS "save-game;persistence;headless;ayapplication")
+
     add_executable(GameFlowCoreTest
         unittest/TestMain.cpp
         unittest/Test_GameFlow.cpp

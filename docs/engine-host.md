@@ -1,6 +1,6 @@
 # Engine Host — 装配与服务约定
 
-**Status:** AYModule 默认装配 + **服务面**（`resources` / `physics` / `audio` / `deviceManager` / `scenes` + 可扩展键表）
+**Status:** AYModule 默认装配 + **服务面**（`resources` / `physics` / `audio` / `deviceManager` / `scenes` / `SaveGame` + 可扩展键表）
 **Owner:** `AYApplication`  
 **Related:** [`../design.md`](../design.md) · [`../../AYGameLoop/docs/sim-present-time.md`](../../AYGameLoop/docs/sim-present-time.md) · [`../../AYScene/design.md`](../../AYScene/design.md)
 
@@ -227,6 +227,7 @@ ayt::app::providePhysics(host, mgr);
 | `kHostServiceGameWorldRouter` | `ayt.app.GameWorldRouter` | `IGameWorldRouter*` | `runGameProject` 添加的 `AYApplication.GameWorldRouter` | Server、非 GameProject 应用或尚未初始化 |
 | `kHostServiceUIFlowRuntime` | `ayt.app.UIFlowRuntime` | `UIFlowRuntime*` | `AYApplication.UIFlowRuntime` 安装；模块 shutdown 前清除 | 未选择 UI Flow、headless/server 或模块尚未安装 |
 | `kHostServiceUIFlowSceneBridge` | `ayt.app.UIFlowSceneBridge` | `UIFlowSceneBridge*` | `AYApplication.UIFlowSceneBridge` 安装；模块 shutdown 前清除 | 未接入 Scene Bridge 或模块尚未安装 |
+| `kHostServiceSaveGame` | `ayt.app.SaveGameService` | `SaveGameService*` | `runGameProject` 按最终 user-data 路径创建并由 Application 生命周期持有 | 非 GameProject 应用或不在活动 Application 生命周期内 |
 | `kHostServiceOnlineFlow` | `ayt.net.OnlineFlowCoordinator` | `OnlineFlowCoordinator*` | `AYOnlineApplication.Runtime` 初始化 | 未选择 Online 栈或尚未初始化 |
 | `kHostServiceOnlineApplication` | `ayt.app.online.OnlineApplication` | `IOnlineApplicationSubSystem*` | `AYOnlineApplication.Runtime` 初始化 | 未选择 Online 栈或尚未初始化 |
 

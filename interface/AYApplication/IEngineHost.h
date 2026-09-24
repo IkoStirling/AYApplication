@@ -43,6 +43,8 @@ class SceneManager;
 namespace ayt::app
 {
 
+class SaveGameService;
+
 // ---------------------------------------------------------------------------
 // Stable service keys (add new keys here + docs/engine-host.md table together)
 // ---------------------------------------------------------------------------
@@ -65,6 +67,8 @@ inline constexpr const char* kHostServiceUIFlowRuntime =
     "ayt.app.UIFlowRuntime";
 inline constexpr const char* kHostServiceUIFlowSceneBridge =
     "ayt.app.UIFlowSceneBridge";
+inline constexpr const char* kHostServiceSaveGame =
+    "ayt.app.SaveGameService";
 
 /// Process-scoped engine host: assembly + service discovery (not a gameplay module).
 class IEngineHost {
