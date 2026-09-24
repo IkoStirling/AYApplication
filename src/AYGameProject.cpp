@@ -630,6 +630,11 @@ int runGameProject(GameProject project, AppCommandLine commandLine)
     const GameWorld* startupWorld = project.serverMode || usesGameFlow
         ? nullptr : findWorld(project.worlds, project.startupWorld);
 
+    // Package smoke checks exercise the real executable, dynamic-library
+    // loading, command-line parser, project contract and startup GameFlow
+    // preparation without relying on an interactive desktop in CI.
+    if (commandLine.validateStartup) return 0;
+
     GameDesc desc;
     desc.name = project.displayName.c_str();
     desc.width = project.width;

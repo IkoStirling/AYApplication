@@ -49,6 +49,21 @@ TEST_SUITE(ApplicationTest)
         CHECK(commandLine.unknownArgs.front() == "--\xe6\xb5\x8b\xe8\xaf\x95");
     }
 
+    TEST_CASE(AppCommandLine_ParsesPackagedStartupValidation) {
+        char executable[] = "Game.exe";
+        char validate[] = "--validate-startup";
+        char assetOption[] = "-asset-root";
+        char assetRoot[] = "Content";
+        char* arguments[] = {
+            executable, validate, assetOption, assetRoot};
+
+        const auto commandLine = AppCommandLine::parse(4, arguments);
+
+        CHECK(commandLine.validateStartup);
+        CHECK(commandLine.assetRoot == "Content");
+        CHECK(commandLine.unknownArgs.empty());
+    }
+
 TEST_SUITE_END
 
 } // namespace ayt::app::test

@@ -4,6 +4,7 @@
 #include <AYTest.h>
 
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -72,7 +73,11 @@ GameProjectScaffoldPlan makeProject(DoctorSandbox& sandbox)
     });
     std::string error;
     CHECK(static_cast<bool>(plan));
-    CHECK(writeGameProjectScaffold(plan, &error));
+    const bool written = writeGameProjectScaffold(plan, &error);
+    if (!written) {
+        std::fprintf(stderr, "[ProjectDoctorTests] %s\n", error.c_str());
+    }
+    CHECK(written);
     CHECK(error.empty());
     return plan;
 }

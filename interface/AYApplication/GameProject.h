@@ -127,7 +127,9 @@ public:
 
 /// Run a standalone game through the standard Application assembly.
 /// GameProject is taken by value so every string/callback remains valid for
-/// the complete synchronous run.
+/// the complete synchronous run. AppCommandLine::validateStartup performs the
+/// same project/startup-flow preparation and exits before creating a window;
+/// packaged-build gates use it to verify staged executables and content.
 int runGameProject(GameProject project, AppCommandLine commandLine = {});
 int runGameProject(GameProject project, int argc, char* argv[]);
 int runGameProject(GameProject project, int argc, wchar_t* argv[]);

@@ -474,6 +474,16 @@ AYProjectContentValidator.exe <project-root> --profile headless `
 `UIFlowSerializer`。只有 `full-client` profile 会进一步构造 UI layout widget 树。两种
 profile 对 ID、payload type、默认值和路径边界给出一致结论。
 
+发布后的可执行文件支持确定性的启动资产校验：
+
+```powershell
+./MyGame.exe -asset-root Content --validate-startup
+```
+
+该命令从当前 staging 目录装载正式 startup flow、准备 GameFlow 并验证 World 引用，
+成功后在创建窗口前退出。构建门禁用它确认 EXE、相邻运行库和 Content 可以脱离构建
+目录工作；日常运行不要携带 `--validate-startup`。
+
 ## 确定性录制与回放
 
 `AYApplicationGameFlow` 只依赖 `IGameFlowDeterminismExchange`，因此服务器和内容工具不会

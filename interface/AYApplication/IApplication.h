@@ -69,6 +69,10 @@ struct AppCommandLine {
     bool noPhysics = false;
     /// `-server` — headless Server assembly (no Device/Audio/Renderer).
     bool server = false;
+    /// `-validate-startup` — resolve and validate project startup assets, then
+    /// exit before creating a window or entering the application loop. This is
+    /// intended for packaged-build smoke checks.
+    bool validateStartup = false;
     uint32_t width = 0;
     uint32_t height = 0;
     float fps = 0.0f;

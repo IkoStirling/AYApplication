@@ -115,6 +115,9 @@ AppCommandLine parseArguments(std::vector<std::string> args)
             cmd.noPhysics = true;
         } else if (arg == "-server") {
             cmd.server = true;
+        } else if (arg == "-validate-startup"
+                   || arg == "--validate-startup") {
+            cmd.validateStartup = true;
         } else if (arg == "-width" && i + 1u < cmd.args.size()) {
             cmd.width = std::stoul(cmd.args[++i]);
         } else if (arg == "-height" && i + 1u < cmd.args.size()) {
@@ -195,6 +198,7 @@ void AppCommandLine::printHelp(const char* appName) const
     std::printf("  -user-data <path>      Set user data directory\n");
     std::printf("  -scene <path>          Load startup .ayscene (Client)\n");
     std::printf("  -flow <path>           Load startup .gameflow.json\n");
+    std::printf("  -validate-startup      Validate startup assets and exit without a window\n");
     std::printf("  -server                Headless Server assembly (no Device/Audio/Renderer)\n");
     std::printf("  -no-audio              Disable audio system\n");
     std::printf("  -no-physics            Disable PhysicsSubSystem\n");
