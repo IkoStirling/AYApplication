@@ -388,7 +388,12 @@ GameFlow。正式流程应使用项目内声明的稳定 World ID。
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "templateVersion": 1,
+  "engineCompatibility": {
+    "minimum": "1",
+    "tested": "1"
+  },
   "id": "my_game",
   "displayName": "My Game",
   "engineProfile": "CLIENT_2D",
@@ -429,10 +434,31 @@ GameFlow。正式流程应使用项目内声明的稳定 World ID。
 引用后者。独立客户端可通过 `enableGameProjectUIFlow(...)` 挂载项目级 UIFlow；
 GameFlow 再通过稳定 context 控制主菜单、HUD 等界面的显示生命周期。
 
+`schemaVersion` 描述清单的 JSON 结构，`templateVersion` 描述项目脚手架版本，
+`engineCompatibility` 使用稳定的项目契约编号，不绑定 Git commit 或引擎营销版本。
+编辑器打开 schema 1 项目时会先统一预检 Scene、GameFlow、UIFlow 和 Build Profile，
+确认不存在未来格式或迁移断点后，再为每个变更文件创建
+`.before-migration*.bak` 备份并原子替换。新于当前引擎的格式会被拒绝，文件不会被改写。
+
 ## 独立内容验证
 
-`AYProjectContentValidator` 使用与运行时相同的 GameFlow migration、registry 和 normalized
-program。它会扫描全部 GameFlow 草稿以发现损坏文件和重复 ID，并严格验证从
+项目级入口是 `AYProjectDoctor`：
+
+```powershell
+AYProjectDoctor.exe <project-root> --profile headless
+AYProjectDoctor.exe <project-root> --profile full-client
+AYProjectDoctor.exe <project-root> --profile headless --migrate
+AYProjectDoctor.exe <project-root> --profile full-client --require-artifacts
+```
+
+它在同一份报告中检查项目清单、Scene/组件、GameFlow、UIFlow/UI Layout、资源引用、
+Build Profile、CMake preset 和运行产物。首次构建前缺少运行产物默认是警告；发布 CI
+使用 `--require-artifacts` 将其提升为错误。`--migrate` 先执行全项目预检，预检存在任何
+未来版本或无迁移路径时不会修改任何文件。Editor 的运行验证和 CLI 都调用这套公共核心。
+
+`AYProjectContentValidator` 保留为只关注内容的低层入口。它使用与运行时相同的
+GameFlow migration、registry 和 normalized program，适合不需要检查构建配置的任务。
+它会扫描全部 GameFlow 草稿以发现损坏文件和重复 ID，并严格验证从
 `startupFlow` 可达的 subflow、action、guard、World、UIFlow entry/context/signal 和
 项目资产引用。输出的 dependency 行是确定性的，可供 CI 定位闭包来源。
 

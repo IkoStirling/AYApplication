@@ -1,5 +1,7 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "templateVersion": 1,
+  "engineCompatibility": { "minimum": "1", "tested": "1" },
   "id": "ui-production-project",
   "displayName": "UI Production Project",
   "paths": { "assets": "Assets" },

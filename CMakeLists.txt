@@ -375,13 +375,17 @@ if(BUILD_TESTING)
 endif()
 
 add_library(AYProjectContentValidationCore STATIC
+    src/AYProjectDoctor.cpp
+    src/AYProjectMigration.cpp
     src/AYProjectContentValidator.cpp
+    interface/AYApplication/ProjectDoctor.h
+    interface/AYApplication/ProjectMigration.h
     interface/AYApplication/ProjectContentValidator.h
     interface/AYApplication/ProjectContentValidatorVersion.h)
 target_include_directories(AYProjectContentValidationCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/interface)
 target_link_libraries(AYProjectContentValidationCore
-    PUBLIC AYScene AYResource AYApplicationGameFlow
+    PUBLIC AYScene AYResource AYApplicationGameFlow AYProject
     PRIVATE nlohmann_json::nlohmann_json)
 target_compile_definitions(AYProjectContentValidationCore PUBLIC
     AYAPPLICATION_CONTENT_VALIDATOR_SOURCE_ABI_VERSION=2)
@@ -399,6 +403,7 @@ target_compile_options(AYProjectContentValidationCore PRIVATE
 if(BUILD_TESTING)
     add_executable(ProjectContentValidatorGameFlowTest
         unittest/TestMain.cpp
+        unittest/Test_ProjectDoctor.cpp
         unittest/Test_ProjectContentValidatorGameFlow.cpp
         unittest/Test_ProjectScaffoldGoldenPath.cpp)
     target_link_libraries(ProjectContentValidatorGameFlowTest PRIVATE
@@ -423,6 +428,14 @@ if(AY_BUILD_CONTENT_VALIDATOR)
     target_link_libraries(AYProjectContentValidator PRIVATE
         AYProjectContentValidationCore AYEntity)
     target_compile_options(AYProjectContentValidator PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>: /W4>
+        $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+
+    add_executable(AYProjectDoctor
+        tools/project_doctor/main.cpp)
+    target_link_libraries(AYProjectDoctor PRIVATE
+        AYProjectContentValidationCore AYEntity)
+    target_compile_options(AYProjectDoctor PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>: /W4>
         $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
 endif()
