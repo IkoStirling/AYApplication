@@ -256,7 +256,7 @@ TEST_CASE(layout_application_commands_are_checked_against_gameflow_intents)
       "layers": [{ "id": "main", "order": 0 }],
       "slots": [{ "id": "main.content", "layer": "main" }],
       "screens": [{
-        "id": "menu", "layout": "menu.ui.json", "layer": "main",
+        "id": "menu", "layout": "ui/menu.ui.json", "layer": "main",
         "slot": "main.content", "scope": "application"
       }],
       "contexts": [{

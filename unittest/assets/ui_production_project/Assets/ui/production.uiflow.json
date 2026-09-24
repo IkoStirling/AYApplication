@@ -13,22 +13,22 @@
     { "id": "modal.main", "layer": "modal", "capacity": 1, "restorePrevious": true }
   ],
   "screens": [
-    { "id": "menu", "layout": "menu.ui.json", "layer": "application", "slot": "application.main", "scope": "application", "events": [
+    { "id": "menu", "layout": "ui/menu.ui.json", "layer": "application", "slot": "application.main", "scope": "application", "events": [
       { "handler": "startGame", "signal": "game.start" },
       { "handler": "startFailingGame", "signal": "game.startFail" }
     ] },
-    { "id": "loading", "layout": "loading.ui.json", "layer": "application", "slot": "application.main", "scope": "application", "enterAnimation": "loading.enter", "events": [
+    { "id": "loading", "layout": "ui/loading.ui.json", "layer": "application", "slot": "application.main", "scope": "application", "enterAnimation": "loading.enter", "events": [
       { "handler": "cancelLoading", "signal": "loading.cancel" }
     ] },
-    { "id": "game", "layout": "game.ui.json", "layer": "application", "slot": "application.main", "scope": "application" },
-    { "id": "hud", "layout": "hud.ui.json", "layer": "hud", "slot": "hud.main", "scope": "world", "events": [
+    { "id": "game", "layout": "ui/game.ui.json", "layer": "application", "slot": "application.main", "scope": "application" },
+    { "id": "hud", "layout": "ui/hud.ui.json", "layer": "hud", "slot": "hud.main", "scope": "world", "events": [
       { "handler": "pauseGame", "signal": "pause.open" },
       { "handler": "finishMatch", "signal": "match.finish" }
     ] },
-    { "id": "pause", "layout": "pause.ui.json", "layer": "modal", "slot": "modal.main", "scope": "application", "events": [
+    { "id": "pause", "layout": "ui/pause.ui.json", "layer": "modal", "slot": "modal.main", "scope": "application", "events": [
       { "handler": "resumeGame", "signal": "pause.close" }
     ] },
-    { "id": "result", "layout": "result.ui.json", "layer": "application", "slot": "application.main", "scope": "application", "enterAnimation": "result.enter", "events": [
+    { "id": "result", "layout": "ui/result.ui.json", "layer": "application", "slot": "application.main", "scope": "application", "enterAnimation": "result.enter", "events": [
       { "handler": "retryGame", "signal": "result.retry" },
       { "handler": "returnMenu", "signal": "result.menu" }
     ] }

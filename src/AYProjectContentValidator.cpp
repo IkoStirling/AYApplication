@@ -525,7 +525,7 @@ void collectLayoutEventIds(
 }
 
 bool collectApplicationCommands(
-    const fs::path& flowPath,
+    const fs::path& assetRoot,
     const nlohmann::json& document,
     UiReferenceCatalog& catalog,
     std::string& error)
@@ -549,9 +549,12 @@ bool collectApplicationCommands(
                 }
             }
         }
-        const fs::path layoutPath =
-            (flowPath.parent_path() / layout->get<std::string>())
-                .lexically_normal();
+        fs::path layoutPath;
+        if (!resolveContainedPath(assetRoot, layout->get<std::string>(),
+                layoutPath, error)) {
+            error = "UIFlow Screen layout cannot be resolved: " + error;
+            return false;
+        }
         nlohmann::json layoutDocument;
         if (!loadJson(layoutPath, layoutDocument, error)) {
             error = "UIFlow Screen layout '" + layoutPath.string()
@@ -585,13 +588,15 @@ bool parseUiType(std::string_view name, GameFlowValueType& type)
 }
 
 bool loadUiReferenceCatalog(const fs::path& path,
+                            const fs::path& assetRoot,
                             UiReferenceCatalog& catalog,
                             std::string& error)
 {
     try {
     nlohmann::json document;
     if (!loadJson(path, document, error)) return false;
-    if (!collectApplicationCommands(path, document, catalog, error)) {
+    if (!collectApplicationCommands(
+            assetRoot, document, catalog, error)) {
         return false;
     }
 #if AY_APPLICATION_CONTENT_VALIDATOR_HAS_UI
@@ -1329,7 +1334,7 @@ ProjectContentValidationResult validateProjectContent(
                             } else {
                                 UiReferenceCatalog candidate;
                                 if (loadUiReferenceCatalog(
-                                        uiFlowPath, candidate,
+                                        uiFlowPath, assets, candidate,
                                         uiReferenceCatalogError)) {
                                     uiReferenceCatalog = std::move(candidate);
                                 }

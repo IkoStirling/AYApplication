@@ -586,7 +586,7 @@ TEST_CASE(real_project_menu_loading_gameplay_pause_result_and_recovery)
         return;
     }
     const UIFlowAssetValidationResult uiAssets = validateUIFlowAssets(
-        uiDocument, (assetRoot / "ui").string());
+        uiDocument, assetRoot.string());
     if (!uiAssets.valid()) {
         for (const UIFlowDiagnostic& diagnostic : uiAssets.diagnostics) {
             failures.push_back(diagnostic.path + ": " + diagnostic.message);
@@ -599,7 +599,7 @@ TEST_CASE(real_project_menu_loading_gameplay_pause_result_and_recovery)
     UIManager manager;
     manager.initialize(nullptr);
     manager.setClientSize(1280.0f, 720.0f);
-    UIManagerFlowScreenHost screenHost(manager, (assetRoot / "ui").string());
+    UIManagerFlowScreenHost screenHost(manager, assetRoot.string());
     UIFlowRuntime uiRuntime(screenHost);
     DeviceInputBridge input(manager);
     std::string error;

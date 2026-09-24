@@ -200,9 +200,7 @@ public:
 private:
     std::filesystem::path uiAssetRoot() const
     {
-        const std::filesystem::path flow =
-            std::filesystem::path(_config.flowPath).parent_path();
-        return (std::filesystem::path(_assetRoot) / flow).lexically_normal();
+        return std::filesystem::path(_assetRoot).lexically_normal();
     }
 
     bool fail(std::string message)
